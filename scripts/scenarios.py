@@ -36,6 +36,7 @@ T_LOITERING = "loitering"
 T_MILITARY = "military_approach"
 T_SATELLITE = "satellite_proximity"
 T_SQUAWK = "emergency_squawk"
+T_MANEUVER = "rapid_maneuver"
 
 
 # ── 관측 패턴 확장기 (dt 오프셋 → ts) ─────────────────────────────────────────
@@ -83,7 +84,35 @@ def _circle(p: dict, now: int) -> list[dict]:
     return out
 
 
-_PATTERNS = {"line": _line, "gapline": _gapline, "circle": _circle}
+def _climb(p: dict, now: int) -> list[dict]:
+    """직선 궤적 + 스텝당 고도(dalt_m)·속도(dvel_mps) 변화 → 급기동(급상승/급강하) 신호.
+
+    수직 변화율 = dalt_m / step(초). dalt_m 음수 = 급강하. 각 관측이 고유 alt/velocity를
+    들고 나오며(다른 패턴은 트랙 레벨 상수 alt를 씀), apply_scenario가 이를 관측에 싣는다.
+    """
+    n = p["n"]
+    ts0, ts1 = now + p["dt_start"], now + p["dt_end"]
+    step = (ts1 - ts0) / max(1, n - 1)
+    alt0 = p.get("alt0", 3000.0)
+    dalt = p.get("dalt_m", 0.0)  # 스텝당 고도 변화(m). 음수 = 강하
+    vel0 = p.get("vel0", 220.0)
+    dvel = p.get("dvel_mps", 0.0)  # 스텝당 속도 변화(m/s)
+    out = []
+    for i in range(n):
+        out.append(
+            {
+                "ts": int(ts0 + i * step),
+                "lat": p["lat"] + i * p.get("dlat", 0.0),
+                "lon": p["lon"] + i * p.get("dlon", 0.0),
+                "squawk": p.get("squawk"),
+                "alt": alt0 + i * dalt,
+                "velocity": vel0 + i * dvel,
+            }
+        )
+    return out
+
+
+_PATTERNS = {"line": _line, "gapline": _gapline, "circle": _circle, "climb": _climb}
 
 
 # ── 시나리오 적용 (store에 write + Track 재구성) ──────────────────────────────
@@ -112,8 +141,10 @@ def apply_scenario(store, scenario: dict, now: int) -> Optional[SyntheticMirrorS
                 ts=o["ts"],
                 lat=o["lat"],
                 lon=o["lon"],
-                alt=tr.get("alt", 9000.0),
-                velocity=tr.get("velocity", 220.0),
+                # 관측별 alt/velocity가 있으면(climb 패턴) 그것을, 없으면 트랙 레벨 상수를 쓴다
+                # (하위호환: line/gapline/circle은 관측별 값이 없어 기존 산출 그대로).
+                alt=o.get("alt", tr.get("alt", 9000.0)),
+                velocity=o.get("velocity", tr.get("velocity", 220.0)),
                 heading=tr.get("heading", 90.0),
                 squawk=o.get("squawk"),
                 on_ground=False,
@@ -385,6 +416,33 @@ SCENARIOS: list[dict] = [
             }
         ],
     },
+    # ── 양성: 급기동 (급상승 — 스텝당 고도 급변, 6000 ft/min 초과) ──
+    {
+        "id": "rapid_climb",
+        "desc": "KADIZ 내 급상승(수직률 ≈9200 ft/min, 임계 6000 초과) → 급기동",
+        "labels": {T_MANEUVER},
+        "tracks": [
+            {
+                "icao24": "r1zoom",
+                "callsign": "ZOOM1",
+                "pattern": "climb",
+                # 8관측·30초 간격 직선 + 스텝당 +1400m(=46.7 m/s≈9186 ft/min). gap 없음·짧음·
+                # 정상 스쿽·비군용·KADIZ(비 OpArea) → 급기동만 트리거.
+                "params": {
+                    "lat": 36.0,
+                    "lon": 127.0,
+                    "dlat": 0.01,
+                    "dlon": 0.01,
+                    "n": 8,
+                    "dt_start": -210,
+                    "dt_end": 0,
+                    "alt0": 3000.0,
+                    "dalt_m": 1400.0,
+                    "squawk": "2000",
+                },
+            }
+        ],
+    },
     # ── 양성(복합): 은닉 정황 내러티브 — dropout + 위성통과 + 뉴스 상관 ──
     {
         "id": "narrative_hidden",
@@ -505,6 +563,32 @@ SCENARIOS: list[dict] = [
                     "dt_start": -300,
                     "dt_end": 0,
                     "squawk": "3647",
+                },
+            }
+        ],
+    },
+    # ── 음성: 정상 상승(민항 정상 상승률 ≈2600 ft/min < 임계) → 급기동 아님 ──
+    {
+        "id": "normal_climb",
+        "desc": "상용기 정상 상승(수직률 ≈2600 ft/min, 임계 6000 미만) → 이상징후 없어야 함",
+        "labels": set(),
+        "tracks": [
+            {
+                "icao24": "71c404",
+                "callsign": "KAL999",
+                "pattern": "climb",
+                # 스텝당 +400m(=13.3 m/s≈2625 ft/min) — 민항 정상 상승률, 급기동 임계 미달.
+                "params": {
+                    "lat": 34.8,
+                    "lon": 128.5,
+                    "dlat": 0.02,
+                    "dlon": 0.02,
+                    "n": 8,
+                    "dt_start": -210,
+                    "dt_end": 0,
+                    "alt0": 2000.0,
+                    "dalt_m": 400.0,
+                    "squawk": "1200",
                 },
             }
         ],

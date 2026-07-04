@@ -1,13 +1,13 @@
 {
   "detection": {
     "now": 1783000000,
-    "n_scenarios": 12,
+    "n_scenarios": 14,
     "per_type": {
       "emergency_squawk": {
         "tp": 1,
         "fp": 0,
         "fn": 0,
-        "tn": 11,
+        "tn": 13,
         "precision": 1.0,
         "recall": 1.0,
         "f1": 1.0
@@ -16,7 +16,7 @@
         "tp": 3,
         "fp": 0,
         "fn": 0,
-        "tn": 9,
+        "tn": 11,
         "precision": 1.0,
         "recall": 1.0,
         "f1": 1.0
@@ -25,7 +25,7 @@
         "tp": 1,
         "fp": 0,
         "fn": 0,
-        "tn": 11,
+        "tn": 13,
         "precision": 1.0,
         "recall": 1.0,
         "f1": 1.0
@@ -34,7 +34,7 @@
         "tp": 2,
         "fp": 0,
         "fn": 0,
-        "tn": 10,
+        "tn": 12,
         "precision": 1.0,
         "recall": 1.0,
         "f1": 1.0
@@ -43,14 +43,23 @@
         "tp": 2,
         "fp": 0,
         "fn": 0,
-        "tn": 10,
+        "tn": 12,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "rapid_maneuver": {
+        "tp": 1,
+        "fp": 0,
+        "fn": 0,
+        "tn": 13,
         "precision": 1.0,
         "recall": 1.0,
         "f1": 1.0
       }
     },
     "overall": {
-      "tp": 9,
+      "tp": 10,
       "fp": 0,
       "fn": 0,
       "micro_precision": 1.0,
@@ -164,6 +173,20 @@
         }
       },
       {
+        "id": "rapid_climb",
+        "desc": "KADIZ 내 급상승(수직률 ≈9200 ft/min, 임계 6000 초과) → 급기동",
+        "labels": [
+          "rapid_maneuver"
+        ],
+        "detected": [
+          "rapid_maneuver"
+        ],
+        "correct": true,
+        "confidences": {
+          "rapid_maneuver": 0.5
+        }
+      },
+      {
         "id": "narrative_hidden",
         "desc": "은닉 정황: ADS-B 끊긴 기체 + 위성 통과 + 뉴스 언급이 correlated_with로 묶임",
         "labels": [
@@ -203,6 +226,14 @@
         "detected": [],
         "correct": true,
         "confidences": {}
+      },
+      {
+        "id": "normal_climb",
+        "desc": "상용기 정상 상승(수직률 ≈2600 ft/min, 임계 6000 미만) → 이상징후 없어야 함",
+        "labels": [],
+        "detected": [],
+        "correct": true,
+        "confidences": {}
       }
     ]
   },
@@ -210,28 +241,26 @@
     "question": "지금 KADIZ에서 ADS-B가 끊긴 기체가 위성 통과·뉴스와 겹치나? 근거와 함께 답하라.",
     "raw_input_chars": 697,
     "pipeline": {
-      "n_sentences": 11,
-      "n_cited_sentences": 11,
+      "n_sentences": 1,
+      "n_cited_sentences": 1,
       "cited_ratio": 1.0,
-      "overall_confidence": 0.52,
+      "overall_confidence": 0.35,
       "has_machine_citations": true,
-      "summary": "최근 30분(지금) 한국 방공식별구역 (KADIZ)에서 이상징후 2건·항적 1대를 확인했습니다.",
+      "summary": "OSINT(저신뢰 ≤0.4) 1건이 한국 방공식별구역 (KADIZ)를 언급 — 예: '관측통 '서해 상공서 미식별 항적 일시 소실' 보도 — KADIZ 긴장'. 확증 아님, 하드 소스로 교차검증 요망.",
       "unsupported_claims": 0
     },
     "bare_llm": {
-      "ok": true,
-      "reason": "",
-      "output_chars": 1088,
+      "ok": false,
+      "reason": "--no-llm(생략)",
+      "output_chars": 0,
       "has_machine_citations": false,
-      "output_excerpt": "**결론: 위성 통과와는 겹침(부분), 뉴스와는 공간만 일치하고 시간은 어긋남.**\n\n## 1. ADS-B 끊김 구간 식별\n\nnvshadow는 60초 간격으로 갱신되다가 두 번 끊김:\n\n- **중간 공백**: ts=1782999340 → 1782999580 사이 **240초 공백** (예상 갱신 3회 누락)\n- **말단 침묵**: 마지막 수신 ts=1782999700 @ (36.50, 125.00) 이후 갱신 없음 — \"지금\" 기준 진행 중인 끊김\n\n북동 방향 이동 중(60초당 약 +0.03°lat/+0.05°lon), squawk 2000(비지정 코드)로 식별성 낮음.\n\n## 2. 위성 통과와의 겹침 — **겹침**\n\n- NORAD 90007 통과창: **1782999820~1783000000**, 최대앙각 82°(거의 천정 통과 → KADIZ 커버 양호)\n- 마지막 ADS-B(1782999700) 이후 **120초 뒤 통과 시작** → 현재 침묵 구간이 통과창과 시간적으로 완전히 겹침\n- 이동 벡터 외삽 시 통과창 중간(~1782999910) 예상 위치 ≈ **(36.61, 125.18)** — KADIZ 서해 구역 내. 위성 교차확인(cross-cue)"
+      "output_excerpt": ""
     }
   },
   "claude_narration_check": {
-    "skipped": false,
-    "produced_by": "template(claude 폴백)",
-    "claude_succeeded": false,
-    "cites_invariant": true,
-    "n_sentences": 11
+    "skipped": true,
+    "reason": "--no-llm(생략)",
+    "template_produced_by": "template"
   },
-  "elapsed_seconds": 90.8
+  "elapsed_seconds": 0.2
 }

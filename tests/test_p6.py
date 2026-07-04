@@ -54,7 +54,7 @@ def test_assess_anchored_is_walltime_independent(tmp_path):
     r1 = assess(store, DEMO_QUERY, now=ANCHOR)
     r2 = assess(store, DEMO_QUERY, now=ANCHOR)
     assert r1["no_evidence"] is False
-    assert r1["counts"]["anomalies"] == 9  # 전 유형 5종 = 9건
+    assert r1["counts"]["anomalies"] == 10  # 전 유형 6종(급기동 포함) = 10건
     assert r1["window"]["start"] == ANCHOR - 30 * 60  # '지금' = 최근 30분
     assert r1["window"]["end"] == ANCHOR
     assert _assess_fingerprint(r1) == _assess_fingerprint(r2)
@@ -65,7 +65,7 @@ def test_scan_all_created_at_anchored(tmp_path):
     store = _store(tmp_path)
     inject_scenario(store, "all", now=ANCHOR)
     anomalies = store.query_anomalies()
-    assert len(anomalies) == 9
+    assert len(anomalies) == 10  # 전 유형 6종(급기동 포함, all 주입 기준)
     # 모든 이상징후의 created_at이 앵커에 고정(벽시계 아님) → replay 완전 결정성.
     assert all(a.created_at == ANCHOR for a in anomalies)
 

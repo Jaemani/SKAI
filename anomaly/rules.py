@@ -98,6 +98,7 @@ ANOMALY_TYPE_ADSB_DROPOUT = "adsb_dropout"
 ANOMALY_TYPE_LOITERING = "loitering"
 ANOMALY_TYPE_MILITARY_APPROACH = "military_approach"
 ANOMALY_TYPE_SATELLITE_PROXIMITY = "satellite_proximity"
+ANOMALY_TYPE_RAPID_MANEUVER = "rapid_maneuver"
 
 # ── 임계 상수 (튜닝 지점 분리) ──
 # dropout: 교차 확인 여부로 신뢰도 이분(단정 금지 — CLAUDE.md). 상세는 crosscheck.py.
@@ -114,6 +115,27 @@ MILITARY_EXPLICIT_CONFIDENCE = 0.55
 SAT_PROXIMITY_WINDOW = 60 * 60  # now ± 이 창의 통과만
 SAT_PROXIMITY_MIN_ELEV = 70.0  # 최대앙각 임계(천정 근접만 → 노이즈 차단)
 SAT_PROXIMITY_CONFIDENCE = 0.4  # 정황(저신뢰)
+# 급기동(rapid maneuver): 같은 Track의 연속 Observation에서 고도·속도 변화율이 임계 초과.
+# 단위 — 고도=미터(OpenSky baro_altitude), 속도=m/s(OpenSky velocity). mapping.py 매핑 참조.
+# 임계 근거(보수적 — 민항 정상 기동을 배제): 민항기 정상 상승/강하는 대략 1500~3000 ft/min,
+# 통상적 비상강하도 6000 ft/min 부근이다. 따라서 6000 ft/min **이상**만 후보로 본다(회피·전투
+# 기동·비상강하 등). 정상 순항 가속은 ~0.5 m/s² 이하 → 3 m/s²(≈0.3g) 지속을 속도 급변으로 본다.
+FT_PER_M = (
+    3.28084  # 미터 → 피트(고도율을 ft/min으로 서술할 때만 사용, 판정은 SI 단위로)
+)
+MANEUVER_VERTICAL_RATE_FPM = 6000.0  # 수직 변화율 임계(ft/min) — 근거 상단 주석
+MANEUVER_VERTICAL_RATE_MPS = MANEUVER_VERTICAL_RATE_FPM / FT_PER_M / 60.0  # ≈ 30.5 m/s
+MANEUVER_ACCEL_MPS2 = 3.0  # 속도 급변(가속/감속) 임계(m/s²) — ≈ 0.3g
+# 비물리적 상한 — 이 이상은 기압고도 스파이크·GPS 튐 등 데이터 글리치로 보고 해당 구간을 무효화
+# (런을 끊는다 = 오탐 방어). 물리적으로 항공기가 지속할 수 없는 값.
+MANEUVER_MAX_VERTICAL_MPS = 150.0  # ≈ 29,500 ft/min 이상 = 물리적 불가(기압고도 글리치)
+MANEUVER_MAX_GROUND_SPEED_MPS = (
+    600.0  # 위치 점프 함의 지상속도 상한(≈2160 km/h) 초과 = GPS 튐
+)
+MANEUVER_MIN_OBSERVATIONS = 4  # 최소 관측 수(구간 ≥3 확보) — 미만이면 판정 유보(노이즈)
+MANEUVER_MIN_RUN = 2  # 연속 초과 구간 ≥2(같은 방향) — 단일점 글리치 방어
+MANEUVER_CONFIDENCE_BASE = 0.5  # 정황(휴리스틱, 단정 금지)
+MANEUVER_CONFIDENCE_STRONG = 0.62  # 고도+속도 동시 급변 시 상향(0.5~0.65 범위 유지)
 
 
 @dataclass
@@ -349,6 +371,158 @@ def detect_satellite_proximity(
                     "start_ts": p.start_ts,
                     "end_ts": p.end_ts,
                     "is_synthetic": p.source == "synthetic",
+                },
+            )
+        )
+    return out
+
+
+# ── 급기동(rapid maneuver) — 고도·속도 급변(임계), 근거 = Observation 시퀀스 ──────
+def _longest_run(
+    metrics: list[Optional[float]], threshold: float
+) -> Optional[tuple[int, int]]:
+    """|metric| ≥ threshold를 **같은 방향으로 연속** 만족하는 최장 런의 (구간 시작, 끝) 인덱스.
+
+    metrics[i] = 구간 i(obs[i]→obs[i+1])의 값(수직률 또는 가속). None = 무효 구간
+    (글리치·GPS 튐 → 런을 끊는다). 부호가 바뀌면(상승↔강하) 런도 끊는다(글리치 방어).
+    런 길이(구간 수) ≥ MANEUVER_MIN_RUN 인 것만 후보. 반환 (i0, i1): 구간 [i0, i1] 포함
+    → 근거 관측은 obs[i0 .. i1+1] (≥ MANEUVER_MIN_RUN+1 건).
+    """
+    best: Optional[tuple[int, int]] = None
+    i, n = 0, len(metrics)
+    while i < n:
+        m = metrics[i]
+        if m is None or abs(m) < threshold:
+            i += 1
+            continue
+        sign = 1 if m > 0 else -1
+        j = i
+        while j + 1 < n:
+            mj = metrics[j + 1]
+            if mj is None or abs(mj) < threshold or (1 if mj > 0 else -1) != sign:
+                break
+            j += 1
+        if (j - i + 1) >= MANEUVER_MIN_RUN and (
+            best is None or (j - i) > (best[1] - best[0])
+        ):
+            best = (i, j)
+        i = j + 1
+    return best
+
+
+def _maneuver_segment(obs: list[Observation]) -> Optional[dict]:
+    """관측 시퀀스 → 급변 구간(있으면 dict, 없으면 None).
+
+    구간별 수직 변화율(Δalt/Δt, m/s)·가속(Δvel/Δt, m/s²)을 구하되, 위치 점프가 함의하는
+    지상속도가 비물리적(>MANEUVER_MAX_GROUND_SPEED_MPS)이거나 수직률이 비물리적
+    (>MANEUVER_MAX_VERTICAL_MPS)인 구간은 데이터 글리치로 무효화한다(런에서 배제).
+    반환 dict: seg(근거 관측 리스트 ≥2)·kind(vertical|speed|both)·peak_vertical_mps·peak_accel_mps2.
+    """
+    vrates: list[Optional[float]] = []
+    accels: list[Optional[float]] = []
+    for a, b in zip(obs, obs[1:]):
+        dt = b.ts - a.ts
+        if dt <= 0:  # 동일·역행 시각 = 무효 구간
+            vrates.append(None)
+            accels.append(None)
+            continue
+        # GPS 튐: 위치 점프가 함의하는 지상속도가 비물리적이면 구간 전체 무효.
+        ground_mps = haversine_km(a.lat, a.lon, b.lat, b.lon) * 1000.0 / dt
+        if ground_mps > MANEUVER_MAX_GROUND_SPEED_MPS:
+            vrates.append(None)
+            accels.append(None)
+            continue
+        if a.alt is not None and b.alt is not None:
+            vr = (b.alt - a.alt) / dt
+            # 비물리적 수직률(기압고도 스파이크) = 무효.
+            vrates.append(None if abs(vr) > MANEUVER_MAX_VERTICAL_MPS else vr)
+        else:
+            vrates.append(None)
+        if a.velocity is not None and b.velocity is not None:
+            accels.append((b.velocity - a.velocity) / dt)
+        else:
+            accels.append(None)
+
+    vrun = _longest_run(vrates, MANEUVER_VERTICAL_RATE_MPS)
+    srun = _longest_run(accels, MANEUVER_ACCEL_MPS2)
+    if vrun is None and srun is None:
+        return None
+
+    # 수직 런 우선(근거 구간). 같은 구간에서 속도도 급변하면 both로 상향.
+    if vrun is not None:
+        i0, i1 = vrun
+        kind = "vertical"
+        if srun is not None and not (srun[1] < i0 or srun[0] > i1):
+            kind = "both"
+    else:
+        assert srun is not None
+        i0, i1 = srun
+        kind = "speed"
+    seg = obs[i0 : i1 + 2]  # 구간 [i0,i1] → 관측 i0..i1+1
+    peak_v = max(
+        (abs(vrates[k]) for k in range(i0, i1 + 1) if vrates[k] is not None),
+        default=0.0,
+    )
+    peak_a = max(
+        (abs(accels[k]) for k in range(i0, i1 + 1) if accels[k] is not None),
+        default=0.0,
+    )
+    return {
+        "seg": seg,
+        "kind": kind,
+        "peak_vertical_mps": peak_v,
+        "peak_accel_mps2": peak_a,
+    }
+
+
+def detect_rapid_maneuver(
+    tracks: list,
+    observations_by_ac: dict[str, list[Observation]],
+    now: int,
+) -> list[AnomalyDraft]:
+    """급기동 후보. 같은 Track의 연속 Observation에서 고도/속도 변화율이 보수적 임계 초과.
+
+    민항 정상 기동(상승·강하 ~1500~3000 ft/min)을 배제하도록 임계를 6000 ft/min(수직)·
+    3 m/s²(가속)로 잡는다(상단 상수 주석에 근거). 노이즈 방어:
+      - 최소 관측 수(MANEUVER_MIN_OBSERVATIONS) 미만이면 판정 유보.
+      - 단일 구간이 아니라 **연속 ≥2 구간이 같은 방향으로** 임계 초과해야 후보(단일점 방어).
+      - 비물리적 수직률(기압고도 스파이크)·지상속도(GPS 튐)는 구간을 무효화(런을 끊음).
+    근거(evidence) = 급변 구간의 Observation 시퀀스(≥2), 주체(involves) = Aircraft.
+    confidence는 휴리스틱(정황) — 단정하지 않는다(0.5, 고도+속도 동시면 0.62로 상향).
+    """
+    out: list[AnomalyDraft] = []
+    for track in tracks:
+        obs = observations_by_ac.get(track.aircraft_ref) or []
+        if len(obs) < MANEUVER_MIN_OBSERVATIONS:
+            continue
+        obs = sorted(obs, key=lambda o: o.ts)
+        seg = _maneuver_segment(obs)
+        if seg is None:
+            continue
+        seg_obs = seg["seg"]
+        last = seg_obs[-1]
+        kind = seg["kind"]
+        confidence = (
+            MANEUVER_CONFIDENCE_STRONG if kind == "both" else MANEUVER_CONFIDENCE_BASE
+        )
+        out.append(
+            AnomalyDraft(
+                type=ANOMALY_TYPE_RAPID_MANEUVER,
+                ts=last.ts,
+                lat=last.lat,
+                lon=last.lon,
+                dedup_key=track.aircraft_ref,
+                evidence=[("Observation", o.id) for o in seg_obs],  # 시퀀스 ≥2
+                involves=[("Aircraft", track.aircraft_ref)],
+                confidence=confidence,
+                signal={
+                    "kind": kind,  # vertical | speed | both
+                    "peak_vertical_fpm": round(
+                        seg["peak_vertical_mps"] * FT_PER_M * 60.0
+                    ),
+                    "peak_accel_mps2": round(seg["peak_accel_mps2"], 1),
+                    "n_obs": len(seg_obs),
+                    "is_synthetic": last.source == "synthetic",
                 },
             )
         )

@@ -27,12 +27,15 @@ from anomaly.rules import (
     ANOMALY_TYPE_ADSB_DROPOUT,
     ANOMALY_TYPE_LOITERING,
     ANOMALY_TYPE_MILITARY_APPROACH,
+    ANOMALY_TYPE_RAPID_MANEUVER,
     ANOMALY_TYPE_SATELLITE_PROXIMITY,
     DROPOUT_CONFIRMED_CONFIDENCE,
     DROPOUT_UNCONFIRMED_CONFIDENCE,
+    MANEUVER_CONFIDENCE_BASE,
     detect_adsb_dropout,
     detect_loitering,
     detect_military_approach,
+    detect_rapid_maneuver,
     detect_satellite_proximity,
 )
 from ontology.model import (
@@ -394,3 +397,157 @@ def test_scan_all_normal_traffic_no_anomaly(tmp_path):
     mirror = apply_scenario(store, sc, now)
     created = scan_and_create_all(store, now=now, crosscheck=mirror)
     assert created == {}  # 정상 트래픽 → 이상징후 0
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 9. 급기동(rapid maneuver) — 고도·속도 급변, 근거 = Observation 시퀀스
+# ══════════════════════════════════════════════════════════════════════════════
+def _maneuver_seq(
+    icao24="r1",
+    *,
+    n=8,
+    step=30,
+    alt0=3000.0,
+    dalt=1400.0,  # 스텝당 고도 변화(m). 1400/30 ≈ 46.7 m/s ≈ 9186 ft/min (임계 초과)
+    vel0=220.0,
+    dvel=0.0,
+    lat=36.0,
+    lon=127.0,
+    dlat=0.01,
+    dlon=0.01,
+    start_ts=1000,
+):
+    """급기동 판정용 관측 시퀀스(균등 간격 직선 + 스텝당 alt/velocity 변화)."""
+    obs = []
+    for i in range(n):
+        obs.append(
+            Observation(
+                id=f"{icao24}-{start_ts + i * step}",
+                aircraft_ref=icao24,
+                ts=start_ts + i * step,
+                lat=lat + i * dlat,
+                lon=lon + i * dlon,
+                alt=alt0 + i * dalt,
+                velocity=vel0 + i * dvel,
+                squawk="2000",
+                source="synthetic",
+                source_url=f"synthetic://{icao24}/{i}",
+            )
+        )
+    return obs
+
+
+def _mtrack(obs):
+    return _track(
+        obs[0].aircraft_ref,
+        [[o.lat, o.lon] for o in obs],
+        obs[0].ts,
+        obs[-1].ts,
+        has_gap=False,
+    )
+
+
+def test_rapid_maneuver_positive_climb():
+    obs = _maneuver_seq("r1", dalt=1400.0)  # 46.7 m/s > 30.5 임계
+    drafts = detect_rapid_maneuver([_mtrack(obs)], {"r1": obs}, now=obs[-1].ts + 10)
+    assert len(drafts) == 1
+    d = drafts[0]
+    assert d.type == ANOMALY_TYPE_RAPID_MANEUVER
+    assert len(d.evidence) >= 2  # 근거 = Observation 시퀀스(≥2)
+    assert all(t == "Observation" for t, _ in d.evidence)
+    assert d.signal["kind"] == "vertical"
+    assert MANEUVER_CONFIDENCE_BASE <= d.confidence <= 0.65  # 정황(단정 아님)
+
+
+def test_rapid_maneuver_positive_speed():
+    # 고도는 정상, 속도만 급변(가속 5 m/s² > 3 임계) → kind=speed.
+    obs = _maneuver_seq("rs", dalt=0.0, vel0=180.0, dvel=150.0)  # 150/30=5 m/s²
+    drafts = detect_rapid_maneuver([_mtrack(obs)], {"rs": obs}, now=obs[-1].ts + 10)
+    assert len(drafts) == 1 and drafts[0].signal["kind"] == "speed"
+
+
+def test_rapid_maneuver_negative_normal_climb():
+    # 민항 정상 상승률(13.3 m/s ≈ 2625 ft/min) < 임계 → 후보 아님.
+    obs = _maneuver_seq("r2", dalt=400.0)
+    assert detect_rapid_maneuver([_mtrack(obs)], {"r2": obs}, now=obs[-1].ts + 10) == []
+
+
+def test_rapid_maneuver_negative_too_few_obs():
+    # 최소 관측 수(4) 미만 → 판정 유보(노이즈 방어).
+    obs = _maneuver_seq("r3", n=3, dalt=1400.0)
+    assert detect_rapid_maneuver([_mtrack(obs)], {"r3": obs}, now=obs[-1].ts + 10) == []
+
+
+def test_rapid_maneuver_negative_single_interval():
+    # 급변이 단일 구간뿐(연속 2 미만) → 후보 아님(단일점 글리치 방어).
+    # 정상 순항 4관측 사이에 1구간만 큰 고도차 → 런 길이 1 < MANEUVER_MIN_RUN.
+    obs = _maneuver_seq("r4", n=5, dalt=0.0)  # 전부 동일 고도
+    obs[3].alt = (
+        obs[2].alt + 2000.0
+    )  # 구간 2→3 한 곳만 급변(다음 구간 3→4는 -2000=복귀)
+    obs[4].alt = obs[2].alt  # 3→4 복귀(부호 반대) → 같은방향 연속 아님
+    assert detect_rapid_maneuver([_mtrack(obs)], {"r4": obs}, now=obs[-1].ts + 10) == []
+
+
+def test_rapid_maneuver_excludes_baro_spike():
+    # 비물리적 고도 스파이크(기압고도 글리치, >150 m/s) → 해당 구간 무효 → 후보 아님.
+    obs = _maneuver_seq("rb", n=6, dalt=0.0)  # 정상 순항
+    obs[3].alt = obs[2].alt + 8000.0  # 한 관측만 +8000m 스파이크(글리치)
+    # 구간 2→3(+8000/30≈267 m/s)·3→4(-8000/30) 모두 비물리적 → 무효 → 런 없음.
+    assert detect_rapid_maneuver([_mtrack(obs)], {"rb": obs}, now=obs[-1].ts + 10) == []
+
+
+def test_rapid_maneuver_excludes_gps_jump():
+    # GPS 튐(비물리적 위치 점프) — 고도값은 급상승처럼 보이나 구간의 지상속도가 비물리적이라
+    # 구간이 무효화된다 → 후보 아님(위치 글리치를 급기동으로 오탐하지 않음).
+    obs = _maneuver_seq("rg", n=5, dalt=1400.0, dlat=15.0, dlon=0.0, lat=10.0)
+    # 스텝당 15° 위도 점프(≈1665km/30s ≫ 600 m/s) → 전 구간 무효.
+    assert detect_rapid_maneuver([_mtrack(obs)], {"rg": obs}, now=obs[-1].ts + 10) == []
+
+
+def test_rapid_maneuver_dedup_and_evidence(tmp_path):
+    # dedup 자연키: 같은 기체·유형·시간창 → Anomaly 1건. evidence ≥ 2 영속.
+    from anomaly.actions import create_from_draft
+
+    store = _store(tmp_path)
+    obs = _maneuver_seq("r5", dalt=1400.0)
+    store.write_aircraft(Aircraft(icao24="r5", callsign="ZOOM"))
+    for o in obs:
+        store.write_observation(o)  # provenance 통과(synthetic + url)
+    drafts = detect_rapid_maneuver([_mtrack(obs)], {"r5": obs}, now=obs[-1].ts + 10)
+    d = drafts[0]
+    a1 = create_from_draft(store, d)
+    a2 = create_from_draft(store, d)  # 재호출 = dedup
+    assert a1.id == a2.id
+    maneuvers = [
+        a for a in store.query_anomalies() if a.type == ANOMALY_TYPE_RAPID_MANEUVER
+    ]
+    assert len(maneuvers) == 1
+    assert len(store.query_evidence_ids(a1.id)) >= 2  # Observation 시퀀스 근거
+
+
+def test_scan_all_rapid_climb_end_to_end(tmp_path):
+    from anomaly.actions import scan_and_create_all
+    from scripts.scenarios import apply_scenario, scenario_by_id
+
+    store = _store(tmp_path)
+    now = 1783000000
+    sc = scenario_by_id("rapid_climb")
+    mirror = apply_scenario(store, sc, now)
+    created = scan_and_create_all(store, now=now, crosscheck=mirror)
+    # 급기동만 트리거(다른 유형 오탐 없음).
+    assert set(created.keys()) == {ANOMALY_TYPE_RAPID_MANEUVER}
+    a = [x for x in store.query_anomalies() if x.type == ANOMALY_TYPE_RAPID_MANEUVER][0]
+    assert len(store.query_evidence_ids(a.id)) >= 2  # 주입→탐지→근거≥2
+
+
+def test_scan_all_normal_climb_no_anomaly(tmp_path):
+    from anomaly.actions import scan_and_create_all
+    from scripts.scenarios import apply_scenario, scenario_by_id
+
+    store = _store(tmp_path)
+    now = 1783000000
+    sc = scenario_by_id("normal_climb")
+    mirror = apply_scenario(store, sc, now)
+    created = scan_and_create_all(store, now=now, crosscheck=mirror)
+    assert created == {}  # 정상 상승 → 이상징후 0

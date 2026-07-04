@@ -22,6 +22,7 @@ from anomaly.rules import (
     detect_emergency_squawk,
     detect_loitering,
     detect_military_approach,
+    detect_rapid_maneuver,
     detect_satellite_proximity,
 )
 from ontology.model import SENSITIVE_CLASSIFICATIONS, Anomaly, Observation
@@ -184,6 +185,11 @@ def scan_and_create_all(
     aircraft_map = store.aircraft_map()
     orbitpasses = store.query_orbitpasses()
     satellite_map = store.satellite_map()
+    # 급기동 룰은 최신 1건이 아니라 기체별 **연속 관측 시퀀스**를 본다(고도·속도 변화율).
+    # 한 번의 질의로 전 관측을 읽어 기체별로 묶는다(데모 bbox 규모에선 비용 무시가능).
+    observations_by_ac: dict[str, list[Observation]] = {}
+    for o in store.query_all_observations():
+        observations_by_ac.setdefault(o.aircraft_ref, []).append(o)
 
     created: dict[str, list[Anomaly]] = {}
 
@@ -199,6 +205,7 @@ def scan_and_create_all(
     drafts += detect_loitering(tracks, latest_by_ac, now)
     drafts += detect_military_approach(latest, aircraft_map, opareas, now)
     drafts += detect_satellite_proximity(orbitpasses, region_map, now, satellite_map)
+    drafts += detect_rapid_maneuver(tracks, observations_by_ac, now)
     for draft in drafts:
         before = store.get_anomaly(draft.anomaly_id)
         a = create_from_draft(store, draft, created_at=now)

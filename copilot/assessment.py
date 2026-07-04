@@ -116,6 +116,20 @@ def _anomaly_sentence_text(d: dict, confidence: float) -> str:
             f"위성 {sat}(NORAD {attrs.get('norad_id')})이 관심지역 상공을 최대앙각 "
             f"{elev:.0f}°로 근접 통과 — 상태 {status}, {conf}(정황)."
         )
+    if t == "rapid_maneuver":
+        kind = attrs.get("kind")
+        fpm = attrs.get("peak_vertical_fpm") or 0
+        acc = attrs.get("peak_accel_mps2") or 0
+        if kind == "speed":
+            what = f"속도 급변(가속 {acc} m/s²)"
+        elif kind == "both":
+            what = f"고도·속도 동시 급변({fpm} ft/min · {acc} m/s²)"
+        else:
+            what = f"고도 급변({fpm} ft/min)"
+        return (
+            f"{synth}항공기 {who}가 {what}의 급기동(민항 정상 범위 초과) — "
+            f"상태 {status}, {conf}, 근거 관측 {nev}건."
+        )
     return f"{synth}이상징후({t}) {who} — 상태 {status}, {conf}, 근거 {nev}건."
 
 

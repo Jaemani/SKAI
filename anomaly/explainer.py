@@ -219,6 +219,7 @@ def explain_draft(draft) -> str:
         ANOMALY_TYPE_ADSB_DROPOUT,
         ANOMALY_TYPE_LOITERING,
         ANOMALY_TYPE_MILITARY_APPROACH,
+        ANOMALY_TYPE_RAPID_MANEUVER,
         ANOMALY_TYPE_SATELLITE_PROXIMITY,
     )
 
@@ -265,6 +266,22 @@ def explain_draft(draft) -> str:
             f"{s.get('region')} 상공을 최대앙각 {s.get('max_elevation', 0):.0f}°(천정 근접)로 "
             f"통과합니다(신뢰도 {c:.2f}, 정황). ISR 수집 창 가능성 — 항적과의 시공간 상관 "
             f"확인 권장."
+        )
+
+    if draft.type == ANOMALY_TYPE_RAPID_MANEUVER:
+        kind = s.get("kind")
+        fpm = s.get("peak_vertical_fpm", 0)
+        acc = s.get("peak_accel_mps2", 0)
+        if kind == "speed":
+            what = f"속도 급변(최대 가속 {acc} m/s²)"
+        elif kind == "both":
+            what = f"고도·속도 동시 급변(수직률 최대 {fpm} ft/min, 가속 {acc} m/s²)"
+        else:
+            what = f"고도 급변(수직률 최대 {fpm} ft/min)"
+        return (
+            f"{prefix}항공기 {callsign}(icao24 {icao24})가 연속 관측 {s.get('n_obs')}건에서 "
+            f"{what}을 보였습니다(급기동, 신뢰도 {c:.2f}). 민항 정상 기동 범위를 초과하는 "
+            f"보수적 임계 기반 정황 — 회피·전투기동·비상강하 가능성, 교차검증 요망."
         )
 
     # 미지원 유형 — 방어적 폴백(사실만).

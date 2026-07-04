@@ -33,6 +33,7 @@ from scripts.scenarios import (
     SCENARIOS,
     T_DROPOUT,
     T_LOITERING,
+    T_MANEUVER,
     T_MILITARY,
     T_SATELLITE,
     T_SQUAWK,
@@ -48,8 +49,9 @@ TYPE_LABELS_KO = {
     T_LOITERING: "로이터링",
     T_MILITARY: "군용기 접근",
     T_SATELLITE: "위성 근접",
+    T_MANEUVER: "급기동",
 }
-ALL_TYPES = [T_SQUAWK, T_DROPOUT, T_LOITERING, T_MILITARY, T_SATELLITE]
+ALL_TYPES = [T_SQUAWK, T_DROPOUT, T_LOITERING, T_MILITARY, T_SATELLITE, T_MANEUVER]
 
 
 def _fresh_store() -> LocalOntologyStore:
