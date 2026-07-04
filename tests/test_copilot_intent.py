@@ -488,6 +488,9 @@ def test_server_assess_and_live(tmp_path, monkeypatch):
     stats = c.get("/api/stats").json()
     assert "last_poll_ts" in stats and stats["live"] is False
     assert stats["observation"] == 2  # 카운트 키 보존(하위호환)
+    # read 소스 노출(SKAI_STORE 미설정 → 로컬 SQLite read).
+    assert stats["store_backend"] == "local"
+    assert lv["store_backend"] == "local"
 
 
 def test_injected_intent_bypasses_classify(tmp_path):

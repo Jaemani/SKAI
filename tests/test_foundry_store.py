@@ -379,6 +379,77 @@ def test_make_store_non_foundry_is_local(tmp_path, monkeypatch):
     assert isinstance(store, LocalOntologyStore)
 
 
+def test_make_store_foundry_returns_hybrid(tmp_path, monkeypatch):
+    """SKAI_STORE=foundry면 make_store가 HybridStore를 반환(서버 foundry read 경로).
+
+    foundry_sdk를 mock해 크리덴셜·네트워크 없이 팩토리 분기만 검증한다(HybridStore.__init__이
+    FoundryOntologyStore→foundry_sdk를 lazy import하므로 mock 필요).
+    """
+    from ontology.store_foundry import HybridStore
+
+    monkeypatch.setenv("SKAI_STORE", "foundry")
+    monkeypatch.setenv("FOUNDRY_TOKEN", "t")
+    monkeypatch.setenv("FOUNDRY_HOSTNAME", "h")
+    mock_sdk = MagicMock()
+    mock_sdk.FoundryClient.return_value = MagicMock()
+    mock_sdk.UserTokenAuth.return_value = MagicMock()
+    with patch.dict(sys.modules, {"foundry_sdk": mock_sdk}):
+        store = make_store(str(tmp_path / "x.db"))
+    assert isinstance(store, HybridStore)
+
+
+# ── current_backend (서버 read 소스 노출 SSOT) ──────────────────────────────
+def test_current_backend_default_is_local(monkeypatch):
+    from ontology.store_foundry import current_backend
+
+    monkeypatch.delenv("SKAI_STORE", raising=False)
+    assert current_backend() == "local"
+
+
+def test_current_backend_foundry(monkeypatch):
+    from ontology.store_foundry import current_backend
+
+    monkeypatch.setenv("SKAI_STORE", "foundry")
+    assert current_backend() == "foundry"
+
+
+def test_current_backend_other_is_local(monkeypatch):
+    from ontology.store_foundry import current_backend
+
+    monkeypatch.setenv("SKAI_STORE", "local")
+    assert current_backend() == "local"
+
+
+# ── read 소스 분리: Foundry발 vs 로컬보강 ────────────────────────────────────
+def test_hybrid_read_separates_foundry_and_local_sources(hybrid):
+    """foundry 모드 read가 Foundry발(관측·항공기)과 로컬보강(Region·Anomaly·correlated_with)을
+    정확히 가르는지 검증한다 — 화면·코파일럿이 실제로 Foundry에서 read하되(정보 소재) provenance는
+    로컬이 채운다는 계약(EVALUATION OVERSOLD#2 종결의 핵심)."""
+    store, fake = hybrid
+    # Foundry 소재: 항공기·관측은 HybridStore가 fake foundry에서 read해야 한다.
+    store.write_aircraft(Aircraft(icao24="mil01", callsign="MIL"))
+    store.write_observation(_valid_obs(icao24="mil01", ts=1_700_000_000))
+    # 로컬 보강: Region·Anomaly + evidenced_by/correlated_with는 로컬 권위본.
+    store.write_region(KADIZ_REGION)
+    store.write_anomaly(
+        Anomaly(
+            id="anomaly-9", type="emergency_squawk", ts=1_700_000_000, confidence=0.9
+        ),
+        evidence=["mil01-1700000000"],
+    )
+
+    # Foundry발: 항공기·관측 read가 fake foundry 데이터에서 나온다.
+    assert [a.icao24 for a in store.query_aircraft()] == ["mil01"]
+    assert store.query_latest_observations()[0].aircraft_ref == "mil01"
+    assert fake.aircraft and fake.obs  # 실제로 Foundry가 소재
+    assert store.local.query_aircraft() == []  # 로컬엔 없음(Foundry발 확인)
+
+    # 로컬보강: Region·Anomaly·evidence read는 로컬(fake foundry엔 없음).
+    assert [r.id for r in store.query_regions()] == ["KADIZ"]
+    assert [a.id for a in store.query_anomalies()] == ["anomaly-9"]
+    assert store.query_evidence_ids("anomaly-9") == ["mil01-1700000000"]
+
+
 # ── FoundryOntologyStore 파라미터 매핑 단위 (mock _pf, 크리덴셜 불요) ────────────────────
 
 

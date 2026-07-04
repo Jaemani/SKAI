@@ -37,6 +37,7 @@ from copilot.assessment import (
     build_subgraph,
 )
 from ontology.model import Anomaly
+from ontology.store_foundry import current_backend, make_store
 from ontology.store_local import DEFAULT_DB, LocalOntologyStore
 from server.live_status import read_status
 
@@ -56,7 +57,13 @@ def _live_view() -> dict:
     st = read_status(DB_PATH)
     now = int(time.time())
     if not st:
-        return {"live": False, "last_poll_ts": None, "mode": None, "server_now": now}
+        return {
+            "live": False,
+            "last_poll_ts": None,
+            "mode": None,
+            "server_now": now,
+            "store_backend": current_backend(),
+        }
     last = st.get("last_poll_ts")
     interval = int(st.get("interval") or 25)
     stale_limit = max(interval * 3, _LIVE_STALE_FLOOR)
@@ -74,6 +81,8 @@ def _live_view() -> dict:
         "last_poll_status": st.get("last_poll_status"),
         "last_cycle": st.get("last_cycle"),
         "server_now": now,
+        # read 소스(로컬 SQLite냐 Palantir Foundry냐) — 프론트 "지금 어디서 read 중" 배지용.
+        "store_backend": current_backend(),
     }
 
 
@@ -106,7 +115,28 @@ class AssessRequest(BaseModel):
     focus_id: Optional[str] = None
 
 
-def _store() -> LocalOntologyStore:
+# Foundry read 모드(SKAI_STORE=foundry) 전용 HybridStore 캐시. 요청마다 FoundryClient(인증
+# 핸드셰이크)를 새로 만들지 않도록 프로세스 1회만 구성한다. 기본·replay(SKAI_STORE 미설정)에선
+# 절대 생성되지 않는다 — 순수 로컬 경로는 store_foundry·foundry_sdk를 건드리지 않는다.
+_foundry_store = None
+
+
+def _store():
+    """읽기용 스토어. SKAI_STORE로 read 백엔드가 갈린다(make_store와 동일 게이트).
+
+    - **기본·replay**(SKAI_STORE 미설정): 매 요청 LocalOntologyStore(DB_PATH)를 새로 만든다 —
+      기존 동작 바이트 불변(오프라인/재현성 회귀 0). foundry_sdk를 import조차 하지 않는다.
+    - **foundry 모드**(SKAI_STORE=foundry): 프로세스 1회 구성한 HybridStore를 재사용한다.
+      read는 Aircraft·Observation·Track·OrbitPass·WeatherState·NewsEvent·Operator·Satellite를
+      **Foundry에서**(저수준 SDK) 수행하고, Region·Anomaly·문장 cites·correlated_with·mentions
+      등 provenance는 **로컬에서 보강**한다(HybridStore 라우팅). 어느 필드가 Foundry발/로컬발인지는
+      HybridStore 라우팅 주석·docs/worklog/foundry-read-mode.md 표를 SSOT로 참조.
+    """
+    if current_backend() == "foundry":
+        global _foundry_store
+        if _foundry_store is None:
+            _foundry_store = make_store(DB_PATH)  # HybridStore(.env 로드·크리덴셜 필요)
+        return _foundry_store
     return LocalOntologyStore(DB_PATH)
 
 
@@ -176,11 +206,13 @@ def api_regions() -> list[dict]:
     ]
 
 
-def _anomaly_to_dict(store: LocalOntologyStore, a: Anomaly) -> dict:
+def _anomaly_to_dict(store, a: Anomaly) -> dict:
     """Anomaly + 근거(evidence) Observation + involves Aircraft를 직렬화.
 
     타임라인 클릭 시 지도 하이라이트·근거 표시에 필요한 필드를 한 번에 내려준다
-    (근거 Observation의 콜사인·시각·source_url = provenance 역추적).
+    (근거 Observation의 콜사인·시각·source_url = provenance 역추적). store는 LocalOntologyStore
+    또는 HybridStore(foundry 모드) — 후자면 근거 Observation·aircraft_map은 Foundry read, Anomaly·
+    evidence 링크·correlations는 로컬 보강 read다(HybridStore 라우팅).
     """
     ac_map = store.aircraft_map()
     evidence = []
@@ -375,7 +407,13 @@ def api_stats() -> dict:
     """
     counts = _store().counts()
     lv = _live_view()
-    return {**counts, "last_poll_ts": lv["last_poll_ts"], "live": lv["live"]}
+    return {
+        **counts,
+        "last_poll_ts": lv["last_poll_ts"],
+        "live": lv["live"],
+        # read 소스 노출(local|foundry) — 프론트가 "지금 Palantir에서 read 중"을 표시할 수 있게.
+        "store_backend": lv["store_backend"],
+    }
 
 
 # ── P4 코파일럿 ────────────────────────────────────────────────────────────

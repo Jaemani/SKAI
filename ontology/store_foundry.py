@@ -1253,6 +1253,20 @@ class HybridStore:
         return getattr(local, name)
 
 
+def current_backend() -> str:
+    """현재 SKAI_STORE가 지시하는 read 백엔드 이름을 반환한다('local'|'foundry').
+
+    make_store와 **동일한 게이트**(SKAI_STORE=foundry만 foundry, 그 외·미설정은 local)를 쓰는
+    SSOT. 스토어를 만들지 않고 값만 판정하므로 크리덴셜·SDK·.env 불요 → 서버가 /api/stats·
+    /api/live에 read 소스("지금 로컬 SQLite냐 Palantir Foundry냐")를 노출할 때 참조한다.
+    """
+    return (
+        "foundry"
+        if os.environ.get("SKAI_STORE", "").strip().lower() == "foundry"
+        else "local"
+    )
+
+
 def make_store(db_path: str = DEFAULT_DB):
     """SKAI_STORE 환경변수로 스토어 선택. 기본(미설정)은 LocalOntologyStore.
 
@@ -1261,8 +1275,7 @@ def make_store(db_path: str = DEFAULT_DB):
 
     커넥터·서버가 LocalOntologyStore(db_path) 대신 이걸 호출하면 SKAI_STORE로 백엔드가 갈린다.
     """
-    backend = os.environ.get("SKAI_STORE", "").strip().lower()
-    if backend == "foundry":
+    if current_backend() == "foundry":
         # .env 자동 로드(FOUNDRY_TOKEN·FOUNDRY_HOSTNAME). 없으면 python-dotenv 부재로 무시.
         try:
             from dotenv import load_dotenv
