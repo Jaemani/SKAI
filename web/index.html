@@ -467,6 +467,7 @@
             <div class="lrow"><span class="l-op dotm"></span>작전구역(OpArea)</div>
             <div class="types" id="type-legend"></div>
             <div class="togrow">
+              <label class="tog"><input type="checkbox" id="tog-ac" checked /> 항공기 표시</label>
               <label class="tog"><input type="checkbox" id="tog-sat" checked /> 위성 궤적 표시</label>
               <label class="tog"><input type="checkbox" id="tog-trail" checked /> 실시간 잔상</label>
             </div>
@@ -604,7 +605,10 @@
     let citeLayer = L.layerGroup().addTo(map);        // cite 클릭 하이라이트
 
     let lastPasses = [];
+    let lastTracks = [];      // 항공기 토글 재렌더용 캐시(위성 lastPasses와 동일 패턴)
+    let lastObs = [];
     let showSat = true;
+    let showAc = true;        // 항공기 레이어(마커·트랙·잔상·추측항법) 표시 여부
     let selectedId = null;
     let anomMarkers = {};
     let lastAnomalies = [];
@@ -671,7 +675,7 @@
         if (!t.path || t.path.length < 2) continue;
         const gap = t.has_gap;
         if (gap) gapCount++;
-        L.polyline(t.path, {
+        if (showAc) L.polyline(t.path, {
           color: gap ? "#ff6b6b" : "#35c26b", weight: gap ? 3 : 2, opacity: 0.85,
           dashArray: gap ? "6 6" : null,
         }).bindTooltip((t.callsign || t.icao24) + " · " + t.n_points + "점" +
@@ -731,8 +735,17 @@
         "<br><span style='color:#8aa'>" + esc(o.source) + "</span>";
     }
 
+    // 항공기 관련 시각 전부 제거(마커·잔상·추측항법 상태). 토글 off 시 사용.
+    function clearAircraft() {
+      acLayer.clearLayers();
+      acTrailLayer.clearLayers();
+      drTracks.clear();
+      trailsOn = false;
+    }
+
     // 관측 배열을 drTracks와 대조 갱신(clearLayers 대신 마커 지속 → rAF로 애니메이션)
     function drawAircraft(obs) {
+      if (!showAc) { clearAircraft(); document.getElementById("n-obs").textContent = obs.length; return; }
       const seen = new Set();
       const t = nowServer();
       for (const o of obs) {
@@ -793,7 +806,10 @@
     }
 
     // 매 프레임 마커 위치 재계산 = 추측항법 외삽 + 보정 블렌드. 라이브일 때만 외삽.
+    // 항공기 토글 off면 rAF 자체를 멈춰 낭비 제거(showAc로 재예약 게이트).
+    let acRaf = null;
     function animateTracks() {
+      acRaf = null;
       const t = nowServer();
       const nowMs = performance.now();
       const live = liveState.live === true && liveState.last_poll_ts != null;
@@ -812,9 +828,11 @@
       }
       if (sample) acLastTrail = nowMs;
       if (!live && trailsOn) clearTrails();   // 재생/정지 모드 = 정적(잔상 없음)
-      requestAnimationFrame(animateTracks);
+      if (showAc) acRaf = requestAnimationFrame(animateTracks);
     }
-    requestAnimationFrame(animateTracks);
+    function startAcAnim() { if (acRaf == null && showAc) acRaf = requestAnimationFrame(animateTracks); }
+    function stopAcAnim()  { if (acRaf != null) { cancelAnimationFrame(acRaf); acRaf = null; } }
+    startAcAnim();
 
     function drawOrbitPasses(passes) {
       satLayer.clearLayers();
@@ -1079,6 +1097,8 @@
         ]);
         lastAnomalies = anomalies;
         lastPasses = passes;
+        lastTracks = tracks;
+        lastObs = obs;
         if (anomalies.length && !anomalies.some((x) => x.id === selectedId)) selectedId = anomalies[0].id;
         drawRegions(regions);
         drawTracks(tracks);
@@ -1105,6 +1125,15 @@
 
     document.getElementById("tog-sat").addEventListener("change", (ev) => {
       showSat = ev.target.checked; drawOrbitPasses(lastPasses);
+    });
+    // 항공기 토글 — 위성 토글과 동일 패턴(캐시 재렌더). 트랙·마커·잔상·추측항법을 함께 제어.
+    document.getElementById("tog-ac").addEventListener("change", (ev) => {
+      showAc = ev.target.checked;
+      if (showAc) {
+        drawTracks(lastTracks); drawAircraft(lastObs); startAcAnim();   // 복원 + 보간 재개
+      } else {
+        stopAcAnim(); drawTracks(lastTracks); drawAircraft(lastObs);    // rAF 정지 + 시각 제거
+      }
     });
     document.getElementById("tog-trail").addEventListener("change", (ev) => {
       showTrail = ev.target.checked; if (!showTrail) clearTrails();
