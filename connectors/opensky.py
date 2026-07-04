@@ -35,9 +35,10 @@ import time
 
 import httpx
 
-from anomaly.actions import scan_and_create
+from anomaly.actions import scan_and_create_all
+from anomaly.crosscheck import CrossCheckSource
 from anomaly.explainer import get_explainer
-from connectors import celestrak, gdelt, metar
+from connectors import celestrak, crosscheck_live, gdelt, metar
 from ontology import mapping
 from ontology.custody import rebuild_tracks
 from ontology.model import KADIZ_BBOX, KADIZ_REGION
@@ -89,10 +90,17 @@ def fetch_states(client: httpx.Client, bbox: dict) -> tuple[list, str]:
 
 
 def ingest_cycle(
-    store: LocalOntologyStore, client: httpx.Client, bbox: dict
+    store: LocalOntologyStore,
+    client: httpx.Client,
+    bbox: dict,
+    crosscheck: CrossCheckSource | None = None,
 ) -> tuple[int, int, int]:
     """1 폴링 사이클: fetch → write(Aircraft/Observation/observed_as) → Track 재구성
-    → 이상탐지(비상 스쿽 룰 → CreateAnomaly).
+    → 이상탐지(P5 전 유형 룰 → CreateAnomaly + 상관 영속).
+
+    이상탐지는 scan_and_create_all(비상 스쿽 + dropout + 로이터링 + 군용기 + 위성 근접)로
+    전 유형을 스캔한다. dropout은 crosscheck(2차 소스)로 교차 판정 — 기본 Null(미확인·저신뢰),
+    SKAI_CROSSCHECK=live 게이트 시 라이브 2차 소스(adsb.fi)로 상향 판정(crosscheck_live).
 
     반환: (이번 사이클 처리 관측 수, 등장 항공기 수, 신규 Anomaly 수).
     """
@@ -115,10 +123,14 @@ def ingest_cycle(
         icaos.add(aircraft.icao24)
 
     rebuild_tracks(store)
-    # 이상탐지: 최신 관측을 비상 스쿽 룰에 통과 → CreateAnomaly(evidence 강제).
-    # dedup으로 같은 비상은 중복 생성 안 됨. 백엔드는 SKAI_EXPLAINER로 선택(기본 template).
-    new_anomalies = scan_and_create(store, explainer=get_explainer())
-    return n_obs, len(icaos), len(new_anomalies)
+    # 이상탐지: P5 전 유형 스캔 → CreateAnomaly(evidence 강제) + 상관 영속.
+    # dedup으로 같은 이상은 중복 생성 안 됨. 백엔드는 SKAI_EXPLAINER로 선택(기본 template).
+    # crosscheck는 dropout 교차 판정용(기본 Null → 저신뢰; SKAI_CROSSCHECK=live 시 라이브 2차 소스).
+    created = scan_and_create_all(
+        store, crosscheck=crosscheck, explainer=get_explainer()
+    )
+    n_anom = sum(len(v) for v in created.values())
+    return n_obs, len(icaos), n_anom
 
 
 def resolve_sources(sources) -> list[str]:
@@ -217,6 +229,9 @@ def run_poller(
 
     store = make_store(db_path)
     store.write_region(KADIZ_REGION)  # 관심지역 상수 등록
+    # dropout 교차 판정 소스 — 사이클 간 1개 인스턴스 재사용(캐시·레이트리밋 상태 보존).
+    # 기본 Null(미확인·저신뢰), SKAI_CROSSCHECK=live 게이트 시 라이브 2차 소스(adsb.fi).
+    crosscheck = crosscheck_live.make_crosscheck()
     # 소스별 마지막 폴 시각(0=미폴 → 첫 사이클에 due) + 마지막 상태.
     last_poll: dict[str, int] = {s: 0 for s in sources}
     last_status: dict[str, str] = {s: "pending" for s in sources}
@@ -244,7 +259,9 @@ def run_poller(
             n_obs = n_ac = n_anom = 0
             if "opensky" in sources:
                 try:
-                    n_obs, n_ac, n_anom = ingest_cycle(store, client, KADIZ_BBOX)
+                    n_obs, n_ac, n_anom = ingest_cycle(
+                        store, client, KADIZ_BBOX, crosscheck=crosscheck
+                    )
                     status = "ok"
                     last_poll["opensky"] = poll_ts
                     last_status["opensky"] = "ok"

@@ -27,6 +27,13 @@
 - 접근: 공개 미러/피드 존재. ToS 확인.
 - 주의: 밀리터리 필터는 여기서. dropout 비교용 교차소스로 유용.
 
+#### 실검·배선 확인 (2026-07-04)
+- **adsb.fi 채택** — dropout 교차확인 2차 소스로 라이브 배선(`SKAI_CROSSCHECK=live` 게이트, 기본 off). 비상업·교육용 허용(라이선스·판매·임대 금지), 인증 불요, **1 req/s**(코드 강제 1.05s + 30s TTL 캐시). 단일 hex 조회.
+  **Attribution**: 데이터 제공 [adsb.fi](https://adsb.fi) — 인용 요건 준수.
+- airplanes.live: 옵션(SKAI_CROSSCHECK_SOURCE) — ToS 원문 미확인(봇차단)이라 기본 아님.
+- ADS-B Exchange: **탈락** — 무료 API 폐지(2025-03, RapidAPI 유료 전환).
+- 한계(정직): 무료 2차 API는 현재 스냅샷만 — "지금 2차 소스가 보는가"의 근사 교차이지 window 전체 부재 단정 아님. 판정: 신선 관측=dropout 아님 / 미관측=부재 교차확인 / 오류·stale=미확인(단정 금지).
+
 ## 2. 위성 궤도 (Satellite Orbits)
 
 ### Celestrak — 1순위
