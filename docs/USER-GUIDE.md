@@ -16,18 +16,37 @@
 scripts/demo.sh replay
 #   → http://localhost:8000  접속
 
-# 라이브 — 실 OpenSky API 연속 폴링(기본 25초) + 서버. 네트워크 정상일 때.
+# 라이브(순수) — 다중소스 실 API 연속 폴링, 실데이터만(합성 없음).
 scripts/demo.sh live
+
+# 라이브(임팩트) — 순수 라이브 + 내러티브 합성 1건(데모 서사).
+scripts/demo.sh live --inject
 
 # 중지 / 상태
 scripts/demo.sh stop
 scripts/demo.sh status
 ```
 
+### 모드 4가지 (각 성격·기동·env)
+
+| 모드 | 기동 | 데이터 | 결정성 | 주요 env |
+|---|---|---|---|---|
+| **replay**(발표 기본) | `scripts/demo.sh replay` | 데모 전용 DB(`data/demo/skai_demo.db`)에 합성 시나리오 전량. **네트워크 0**(오프라인 강제). | **결정적**(같은 입력=같은 화면, 바이트 단위) | `SKAI_OFFLINE=1`·`SKAI_NOW_ANCHOR`(내부 자동) |
+| **live**(순수) | `scripts/demo.sh live` | **실데이터만** — OpenSky 항적·GDELT 뉴스·METAR 기상·Celestrak 위성을 각자 주기로 연속 폴링. 합성 주입 없음. | 비결정(실시간 변동) | `SKAI_POLL_SOURCES`(기본 `opensky,gdelt,metar,celestrak`), `SKAI_POLL_INTERVAL`(기본 25s) |
+| **live --inject** | `scripts/demo.sh live --inject` | 순수 라이브 + 내러티브 합성 1건(라이브 KADIZ엔 재현성 있는 이상징후가 상시 없으므로 데모 서사용). | 비결정 + 고정 서사 1건 | 위와 동일(내부에서 `--allow-live-db`로 합성 1건 승인) |
+| **Foundry(read+AIP)** | 서버를 `SKAI_STORE=foundry SKAI_COPILOT_LLM=aip SKAI_DB=data/demo/skai_foundry_local.db`로 기동(+`scripts/demo_foundry.sh`가 먼저 Foundry에 write) | 화면 정보소재 read가 **실 Palantir Foundry**, 상황요약 헤드라인은 **AIP Logic 생성**. | 비결정(AIP는 LLM 서술) | `SKAI_STORE=foundry`·`SKAI_COPILOT_LLM=aip`·`.venv312`(OSDK)·`.env`(FOUNDRY_TOKEN 등) |
+
 - **replay 모드**: 데이터가 고정된 스냅샷입니다. 헤더의 상태 배지가 노란색 **"재생 모드 · 고정 스냅샷"**으로
-  표시됩니다. 발표·리허설·스크린샷 재현용(같은 입력 = 같은 화면).
-- **live 모드**: 실 항적이 25초마다 갱신됩니다. 헤더 배지가 녹색으로 점멸하며 **"LIVE · N초 전 갱신"**을
-  보여주고, 지도 마커가 실제로 움직입니다.
+  표시됩니다. 발표·리허설·스크린샷 재현용(같은 입력 = 같은 화면). `store_backend=local`.
+- **live 모드**: 4소스가 각자 주기로 갱신됩니다(항적 25s·뉴스 5m·기상 30m·위성 12h). 헤더 배지가 녹색으로
+  점멸하며 **"LIVE · N초 전 갱신"**을 보여주고, 지도 마커가 실제로 움직입니다. 뉴스 카드는 **실 기사 URL로
+  클릭 가능**(GDELT). 군사 항공 RSS 4피드(theaviationist·twz·defensenews·yonhap)는 **옵션**이라 기본엔 없고
+  `SKAI_POLL_SOURCES=opensky,gdelt,metar,celestrak,rss`로 켭니다.
+- **Foundry 모드**: `SKAI_STORE=foundry`면 화면·코파일럿의 정보소재 read가 실 Palantir Foundry에서 옵니다
+  (`store_backend=foundry`). `SKAI_COPILOT_LLM=aip`를 더하면 상황요약 헤드라인을 **AIP Logic이 생성**합니다
+  (`produced_by=aip_logic`). 단 **탐지·근거 강제·문장별 cites는 로컬 엔진 그대로** — AIP는 서술만 담당하고,
+  기본값은 재현성을 위해 template입니다(aip는 opt-in). 상세는 §6·§8과 `docs/worklog/foundry-read-mode.md`·
+  `aip-logic-wire.md`·`region-summary-wire.md`.
 
 첫 진입 시 **온보딩 안내**가 자동으로 뜹니다(화면 구성 + 핵심 동선 요약). 헤더 오른쪽 **`? 안내`** 버튼으로
 언제든 다시 볼 수 있습니다. `?q=...` 같은 공유·재현 딥링크로 들어오면 온보딩은 건너뜁니다.
@@ -139,6 +158,24 @@ scripts/demo.sh status
   마커가 실제로 이동합니다.
 - 질의 처리 중에는 코파일럿 답변 영역에 **로딩 스피너**가 표시됩니다.
 
+### read 소스 배지 · 소스별 신선도 (API 제공 — 일부 프론트 표시 예정)
+
+`/api/live`·`/api/stats`가 아래 필드를 제공합니다. **필드는 백엔드에 이미 있고, 프론트 렌더는 항목별로
+"현재 표시" / "표시 예정"을 정직하게 구분**합니다.
+
+| 필드 | 뜻 | 프론트 표시 |
+|---|---|---|
+| `store_backend` | 화면 정보소재 read 출처: `local`(로컬 SQLite) 또는 `foundry`(실 Palantir Foundry). | **표시 예정** — LIVE 배지 옆 "Palantir Foundry read / 로컬 SQLite read". 지금은 API로만 확인 |
+| `sources` | 활성 폴링 소스 리스트(예: `["opensky","gdelt","metar","celestrak"]`). | **표시 예정** |
+| `source_last_poll` | `{소스: 마지막 폴 시각}` — 소스별 최신성(미폴은 0). | **표시 예정** — "뉴스 3m 전·기상 12m 전"처럼 소스별 신선도. 없으면(구 사이드카/replay) 전체 `last_poll_ts`로 폴백 |
+| `source_last_status` | `{소스: "ok"/"error"/"pending"}` — 소스별 마지막 폴 결과. | **표시 예정** — `error`면 경고 |
+| `last_poll_ts`·`live`·`mode` | 전체 신선도·LIVE 여부(**현재 헤더 배지가 사용**). | **표시 중** |
+
+- `source_last_status="ok"`는 **폴 호출이 예외 없이 완료됨**을 뜻합니다(행 저장 성공이 아님). 예: GDELT가
+  429로 스킵하거나 기사 0건이어도 `ok`이고, 실패 상세는 폴러 로그에 남습니다.
+- replay·기본 데모는 항상 `store_backend=local`(결정성). `store_backend`는 read 소스일 뿐 **"AIP가 추론한다"는
+  뜻이 아닙니다** — 추론(탐지·평가)은 로컬 엔진, AIP Logic은 설명·요약 서술만(§0 Foundry 모드).
+
 ---
 
 ## 5. "근거가 흐르는" 시각화
@@ -177,6 +214,22 @@ scripts/demo.sh status
   낮게(≈0.5) 나옵니다 — 단정하지 않습니다.
 - 근거를 못 찾으면 **"해당 없음"**을 정직하게 보고합니다(엉뚱한 객체로 대체하지 않음).
 
+### 답변 서술 백엔드 — template vs AIP Logic (`produced_by`)
+
+같은 질의라도 서술을 **누가 쓰느냐**가 모드로 갈립니다. 응답의 `produced_by` 필드로 확인합니다.
+
+| 모드 | `produced_by` | 상황요약 헤드라인 서술 | cites·탐지·평가 |
+|---|---|---|---|
+| **기본**(replay·live) | `template` | 룰 기반 템플릿(결정적) | 룰 엔진 |
+| **AIP**(Foundry + `SKAI_COPILOT_LLM=aip`) | `aip_logic` | **Foundry AIP Logic이 생성**(`region-situation-summary` 함수가 Anomaly 객체를 읽어 종합) + `overallAssessment` 한줄판정 | **동일**(룰 엔진 — AIP는 서술만) |
+
+- **핵심(정직)**: AIP 모드에서도 **문장별 `cites`는 template 모드와 완전히 같습니다.** provenance(근거
+  역추적)는 룰이 보장하고, AIP는 상황요약 **헤드라인 서술**만 바꿉니다. 개별 이상징후 설명도 AIP로
+  생성할 수 있습니다(`SKAI_EXPLAINER=aip`, `explain-anomaly` 함수 — 현재 비상 스쿽 경로).
+- AIP 모드는 **Foundry 스토어일 때만·situation_summary 의도일 때만** 켜지고, 크리덴셜·OSDK 부재나 호출
+  실패 시 자동으로 `template(aip 폴백)`으로 강등됩니다(답변은 항상 나옴). 기본값이 template인 이유는
+  재현성(같은 스냅샷=같은 답) — AIP LLM 서술은 매번 미세하게 달라 replay 결정성과 상충하기 때문입니다.
+
 ---
 
 ## 7. 빈 상태 / 오류 상태
@@ -190,7 +243,7 @@ scripts/demo.sh status
 
 ## 8. 백엔드에 추가로 필요한 필드
 
-**없음.** 이번 재설계는 `docs/worklog/copilot-backend-api.md`에 명세된 계약만으로 전부 렌더합니다.
+**현재 렌더에는 없음.** 이번 재설계는 `docs/worklog/copilot-backend-api.md`에 명세된 계약만으로 전부 렌더합니다.
 
 - 의도별 렌더: `/api/assess`의 `intent`·`slots`·`intent_meta`·`sentences[].kind/cites/confidence`·
   `cited_objects[id].{type,label,lat,lon,source_url,status}` 사용.
@@ -200,6 +253,17 @@ scripts/demo.sh status
 > 향후 강화 아이디어(현재 계약으로 대체 가능, 필수 아님): 이상징후의 비-관측 근거(위성 통과 등)에
 > 좌표가 있으면 `evidenced_by` 흐름선을 관측 외 근거까지 확장 가능. 지금은 좌표 있는 근거만 연결선,
 > 나머지는 상세 카드로 표기합니다.
+
+### 2026-07-04 추가된 옵션 필드 (백엔드 제공 · 프론트 표시 예정)
+
+아래는 백엔드가 새로 노출하지만 **현재 프론트가 아직 렌더하지 않는** 필드입니다(§4·§6에 상세). 렌더는
+후속 web/ 작업 — 지금은 API로 확인 가능하고, 값이 없으면(구 사이드카/replay) 기존 필드로 폴백합니다.
+
+- `/api/stats`·`/api/live` → **`store_backend`**(`local`|`foundry`) : read 소스 배지(§4).
+- `/api/live` → **`sources`·`source_last_poll`·`source_last_status`** : 소스별 신선도 배지(§4).
+  없으면 전체 `last_poll_ts`로 폴백.
+- `/api/assess` → **`produced_by`**(`template`|`aip_logic`)·**`overall_assessment`** : AIP Logic 서술
+  모드 표기(§6). `cites`·`cited_objects` 계약은 두 모드에서 **동일**(provenance 불변).
 
 ---
 
