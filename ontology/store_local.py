@@ -138,6 +138,7 @@ class LocalOntologyStore:
                     link_type TEXT,
                     dst_type TEXT,
                     dst_id TEXT,
+                    attrs_json TEXT,
                     UNIQUE(src_type, src_id, link_type, dst_type, dst_id)
                 );
                 -- P3 융합 객체 (기존 DB 비파괴: IF NOT EXISTS) --
@@ -214,6 +215,13 @@ class LocalOntologyStore:
                 );
                 """
             )
+            # 마이그레이션(기존 DB 비파괴): link.attrs_json 컬럼이 없으면 추가한다.
+            # correlated_with 링크에 "왜 상관인가"(시간차·공간관계)를 실을 곳. IF NOT EXISTS
+            # CREATE는 이미 있는 테이블에 컬럼을 더하지 못하므로 여기서 ALTER로 보강한다.
+            # 기존 링크는 attrs_json=NULL로 그대로 읽힌다(하위호환 — 읽기 안 깨짐).
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(link)")}
+            if "attrs_json" not in cols:
+                conn.execute("ALTER TABLE link ADD COLUMN attrs_json TEXT")
 
     # ── write ──────────────────────────────────
     def write_region(self, region: Region) -> None:
@@ -337,13 +345,39 @@ class LocalOntologyStore:
         link_type: str,
         dst_type: str,
         dst_id: str,
+        attrs: Optional[dict] = None,
     ) -> None:
+        """generic 링크 upsert. attrs 미지정이면 기존과 동일(INSERT OR IGNORE, 멱등).
+
+        attrs 지정 시(correlated_with 사유 등) 충돌해도 attrs_json을 갱신한다 — 재실행마다
+        결정적 사유를 새로 계산해 넣으므로, 마이그레이션 전에 만들어진 attrs=NULL 링크도
+        다음 실행에서 사유가 채워진다. attrs 미지정 경로는 손대지 않아 다른 링크 타입의
+        기존 멱등 동작이 보존된다(하위호환).
+        """
         with self._connect() as conn:
-            conn.execute(
-                "INSERT OR IGNORE INTO link "
-                "(src_type, src_id, link_type, dst_type, dst_id) VALUES (?, ?, ?, ?, ?)",
-                (src_type, src_id, link_type, dst_type, dst_id),
-            )
+            if attrs is None:
+                conn.execute(
+                    "INSERT OR IGNORE INTO link "
+                    "(src_type, src_id, link_type, dst_type, dst_id) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (src_type, src_id, link_type, dst_type, dst_id),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO link "
+                    "(src_type, src_id, link_type, dst_type, dst_id, attrs_json) "
+                    "VALUES (?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(src_type, src_id, link_type, dst_type, dst_id) "
+                    "DO UPDATE SET attrs_json=excluded.attrs_json",
+                    (
+                        src_type,
+                        src_id,
+                        link_type,
+                        dst_type,
+                        dst_id,
+                        json.dumps(attrs, ensure_ascii=False),
+                    ),
+                )
 
     # ── write (P3 융합 객체) ────────────────────
     def write_satellite(self, satellite: Satellite) -> None:
@@ -767,33 +801,58 @@ class LocalOntologyStore:
 
         교차소스 내러티브의 영속 링크(ontology.md §2). correlated_with는 대칭이라
         anomaly↔anomaly는 정준방향(작은 id→큰 id)으로 저장되므로, 이 질의는 src·dst
-        양방향을 모아 항상 **상대 객체**를 dst로 정규화해 반환한다. 반환 {dst_type, dst_id}.
+        양방향을 모아 항상 **상대 객체**를 dst로 정규화해 반환한다.
+        반환 {dst_type, dst_id, reason}. reason = "왜 상관인가"(시간차·공간관계) dict 또는
+        None(마이그레이션 전 생성된 구링크). UI가 상관 근거 표시에 쓴다.
         """
         with self._connect() as conn:
             out_rows = conn.execute(
-                "SELECT dst_type, dst_id FROM link WHERE src_type='Anomaly' AND src_id=? "
-                "AND link_type='correlated_with'",
+                "SELECT dst_type, dst_id, attrs_json FROM link "
+                "WHERE src_type='Anomaly' AND src_id=? AND link_type='correlated_with'",
                 (anomaly_id,),
             ).fetchall()
             # 반대방향(다른 Anomaly가 이 Anomaly를 correlated_with로 가리킴)
             in_rows = conn.execute(
-                "SELECT src_type, src_id FROM link WHERE dst_type='Anomaly' AND dst_id=? "
+                "SELECT src_type, src_id, attrs_json FROM link "
+                "WHERE dst_type='Anomaly' AND dst_id=? "
                 "AND link_type='correlated_with' AND src_type='Anomaly'",
                 (anomaly_id,),
             ).fetchall()
-        out = [{"dst_type": r["dst_type"], "dst_id": r["dst_id"]} for r in out_rows]
-        out += [{"dst_type": r["src_type"], "dst_id": r["src_id"]} for r in in_rows]
+        out = [
+            {
+                "dst_type": r["dst_type"],
+                "dst_id": r["dst_id"],
+                "reason": json.loads(r["attrs_json"]) if r["attrs_json"] else None,
+            }
+            for r in out_rows
+        ]
+        out += [
+            {
+                "dst_type": r["src_type"],
+                "dst_id": r["src_id"],
+                "reason": json.loads(r["attrs_json"]) if r["attrs_json"] else None,
+            }
+            for r in in_rows
+        ]
         return out
 
     def query_all_correlations(self) -> list[dict]:
-        """모든 correlated_with 링크(평가·서브그래프용). 반환 {src_id, dst_type, dst_id}."""
+        """모든 correlated_with 링크(평가·서브그래프용).
+
+        반환 {src_id, dst_type, dst_id, reason}. reason = 사유 dict 또는 None(구링크).
+        """
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT src_id, dst_type, dst_id FROM link "
+                "SELECT src_id, dst_type, dst_id, attrs_json FROM link "
                 "WHERE src_type='Anomaly' AND link_type='correlated_with'"
             ).fetchall()
         return [
-            {"src_id": r["src_id"], "dst_type": r["dst_type"], "dst_id": r["dst_id"]}
+            {
+                "src_id": r["src_id"],
+                "dst_type": r["dst_type"],
+                "dst_id": r["dst_id"],
+                "reason": json.loads(r["attrs_json"]) if r["attrs_json"] else None,
+            }
             for r in rows
         ]
 

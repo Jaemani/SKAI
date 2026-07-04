@@ -43,6 +43,7 @@ from copilot.assessment import (
     assessment_to_summary_dict,
     build_subgraph,
 )
+from copilot.tools import NEWS_MAX_AGE_SECONDS
 from ontology.model import Anomaly
 from ontology.store_foundry import current_backend, make_store
 from ontology.store_local import DEFAULT_DB, LocalOntologyStore
@@ -271,6 +272,8 @@ def _anomaly_to_dict(store, a: Anomaly) -> dict:
                 "type": c["dst_type"],
                 "id": c["dst_id"],
                 "label": obj["label"] if obj else c["dst_id"],
+                # "왜 상관인가"(시간차·공간관계). 구링크는 None(하위호환). UI가 근거 표시에 사용.
+                "reason": c.get("reason"),
             }
         )
     return {
@@ -406,8 +409,17 @@ def api_weather() -> list[dict]:
 
 @app.get("/api/news")
 def api_news() -> list[dict]:
-    """뉴스(저신뢰) + mentions 링크. confidence·저신뢰 표시는 프론트에서."""
+    """뉴스(저신뢰) + mentions 링크. confidence·저신뢰 표시는 프론트에서.
+
+    copilot 질의 경로(copilot/tools.py news())와 동일한 48h 나이 상한을 적용한다
+    (DR-0013 #10). 상한이 없으면 며칠 전 회고 기사가 웹 패널에 무필터로 노출되고,
+    프론트 시계 표기(HH:MM만)와 겹쳐 "방금 기사"처럼 보인다. replay 모드는
+    SKAI_NOW_ANCHOR 기준으로 나이를 계산해 재현성을 유지한다(_now_anchor()).
+    """
     store = _store()
+    now = _now_anchor()
+    if now is None:
+        now = int(time.time())
     return [
         {
             "id": n.id,
@@ -421,6 +433,7 @@ def api_news() -> list[dict]:
             "mentions": store.query_mentions(n.id),  # →Region/Aircraft 링크
         }
         for n in store.query_news()
+        if now - n.ts <= NEWS_MAX_AGE_SECONDS
     ]
 
 

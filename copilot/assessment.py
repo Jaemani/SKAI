@@ -66,6 +66,17 @@ def _fmt_full(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
+def _fmt_news_age(seconds: float) -> str:
+    """뉴스 기사 나이 → "약 N시간 전" 문구(시간 정직성 — 회고 보도임을 명시).
+
+    음수(미래 ts, 이론상 발생 안 함)는 0으로 clamp. 1시간 미만은 "1시간 미만 전".
+    """
+    hours = max(seconds, 0) / 3600
+    if hours < 1:
+        return "1시간 미만 전"
+    return f"약 {round(hours)}시간 전"
+
+
 _STATUS_KO = {"candidate": "미검토", "confirmed": "확인됨", "dismissed": "기각됨"}
 
 
@@ -209,13 +220,13 @@ def _assemble_sentences(
         )
 
     # ── 상관(persisted correlated_with) + 위성 통과 맥락 ──
-    sents.extend(_assemble_correlations_and_satellite(store, reads))
+    sents.extend(_assemble_correlations_and_satellite(store, reads, pq))
 
     # ── 기상 ──
     sents.extend(_weather_sentences(pq, reads))
 
     # ── 뉴스(저신뢰 OSINT) ──
-    news_sent = _news_sentence(region_name, reads)
+    news_sent = _news_sentence(pq, region_name, reads)
     if news_sent is not None:
         sents.append(news_sent)
 
@@ -286,18 +297,28 @@ def _weather_sentences(pq: ParsedQuery, reads: ToolReads) -> list[AssessmentSent
     return out
 
 
-def _news_sentence(region_name: str, reads: ToolReads) -> Optional[AssessmentSentence]:
-    """뉴스(저신뢰 OSINT) 요약 1문장. 뉴스가 없으면 None."""
+def _news_sentence(
+    pq: ParsedQuery, region_name: str, reads: ToolReads
+) -> Optional[AssessmentSentence]:
+    """뉴스(저신뢰 OSINT) 요약 1문장. 뉴스가 없으면 None.
+
+    예시 기사(최신 1건)의 보도 시각을 pq.now 기준 경과시간으로 명시한다(시간 정직성 —
+    회고 보도가 "방금 일"처럼 읽히지 않도록). tools.news()가 이미 48h 상한으로 걸러
+    들어온 기사만 대상이므로 여기서는 표기만 한다.
+    """
     if not reads.news:
         return None
-    top = reads.news[0].data
+    top_fact = reads.news[0]
+    top = top_fact.data
+    age_txt = _fmt_news_age(pq.now - top_fact.ts)
     news_cites: list[str] = []
     for f in reads.news:
         news_cites.extend(f.cites)
     return AssessmentSentence(
         text=(
             f"OSINT(저신뢰 ≤0.4) {len(reads.news)}건이 {region_name}를 언급 — "
-            f"예: '{_clip(top.get('title'), 48)}'. 확증 아님, 하드 소스로 교차검증 요망."
+            f"예: '{_clip(top.get('title'), 48)}'({age_txt} 보도). "
+            f"확증 아님, 하드 소스로 교차검증 요망."
         ),
         cites=_dedup(news_cites),
         confidence=round(max(f.confidence for f in reads.news), 2),
@@ -306,7 +327,7 @@ def _news_sentence(region_name: str, reads: ToolReads) -> Optional[AssessmentSen
 
 
 def _assemble_correlations_and_satellite(
-    store, reads: ToolReads
+    store, reads: ToolReads, pq: ParsedQuery
 ) -> list[AssessmentSentence]:
     """상관 문장(persisted correlated_with) + 비상관 위성 통과 맥락 문장.
 
@@ -314,6 +335,12 @@ def _assemble_correlations_and_satellite(
     **읽어** 문장을 만든다(이 함수는 ±버킷 계산을 하지 않는다 — 로직 SSOT는 correlation.py).
     이상징후당 위성 상관 → 뉴스 상관("은닉 정황") → 이상징후↔이상징후 상관 순으로 낸다.
     상관에 안 걸린 질의창 통과는 맥락 1문장으로 요약한다.
+
+    ⚠️ reads.passes는 _parallel_read가 상관 계산용으로 ±CORRELATION_WINDOW_SECONDS만큼
+    넓혀 읽은 결과다(위 상관 블록은 이 확장 읽기가 필요 — 상관 후보를 놓치지 않기 위해).
+    하지만 아래 "비상관 맥락" 서술 문장은 실제 질의창(pq.window_start~window_end)과
+    겹치는 통과만 포함한다 — 아니면 "지금"(30분 창) 질의에도 최대 2.5시간치 통과가
+    나열되어 시간 정직성을 해친다(팀 진단 2026-07-05).
     """
     out: list[AssessmentSentence] = []
 
@@ -397,8 +424,15 @@ def _assemble_correlations_and_satellite(
                 )
             )
 
-    # 상관에 안 걸린 질의창 통과 → 맥락 1문장(근거 = 그 통과 id들)
-    extras = [pf for pf in reads.passes if pf.data["id"] not in correlated_pass_ids]
+    # 상관에 안 걸린 질의창 통과 → 맥락 1문장(근거 = 그 통과 id들). 서술은 실제 질의창과
+    # 겹치는 통과로 한정(확장 읽기 창 전체를 그대로 나열하지 않는다).
+    win_start, win_end = pq.window_start, pq.window_end
+    extras = [
+        pf
+        for pf in reads.passes
+        if pf.data["id"] not in correlated_pass_ids
+        and not (pf.data["start_ts"] > win_end or pf.data["end_ts"] < win_start)
+    ]
     if extras:
         extras.sort(key=lambda pf: pf.data["start_ts"])
         sample = extras[0].data
@@ -821,11 +855,12 @@ def _entity_sentences(store, pq: ParsedQuery, fact: Fact) -> list[AssessmentSent
     if fact.kind == "weather":
         return _weather_sentences(pq, ToolReads([], [], [], [fact], []))
     if fact.kind == "news":
+        age_txt = _fmt_news_age(pq.now - fact.ts)
         return [
             AssessmentSentence(
                 text=(
                     f"OSINT 뉴스(저신뢰 {d.get('confidence'):.2f}) — "
-                    f"'{_clip(d.get('title'), 60)}'. 확증 아님, 교차검증 요망."
+                    f"'{_clip(d.get('title'), 60)}'({age_txt} 보도). 확증 아님, 교차검증 요망."
                 ),
                 cites=fact.cites,
                 confidence=round(fact.confidence, 2),
@@ -929,11 +964,11 @@ def _assemble_for_intent(
     if it == INTENT_WHY:
         return _assemble_why(store, pq, reads, slots, focus_id)
     if it == INTENT_CORRELATION:
-        return _assemble_correlations_and_satellite(store, reads)
+        return _assemble_correlations_and_satellite(store, reads, pq)
     if it == INTENT_WEATHER:
         return _weather_sentences(pq, reads)
     if it == INTENT_NEWS:
-        s = _news_sentence(_region_name(store, pq.region_id), reads)
+        s = _news_sentence(pq, _region_name(store, pq.region_id), reads)
         return [s] if s is not None else []
     return _assemble_sentences(store, pq, reads)  # situation_summary
 

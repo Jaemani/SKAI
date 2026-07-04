@@ -7,7 +7,17 @@
 P0A gotcha 반영:
   - **GMST 보정 필수**: ECI→위경도 변환 시 atan2(y,x)만으론 경도 수백 도 오차. GMST를 뺀다.
   - `error_code != 0` = 위성 수명 만료 → 스킵.
-  - stations는 소규모 테스트용, 실 운용은 visual 등. GROUP은 상수/환경변수로 교체 가능.
+
+GROUP 선택(2026-07 수정):
+  - 과거 기본 GROUP은 stations,visual(ISS·밝은 육안관측 위성)이었다 — ISR(정찰/이미징)이
+    아니어서 위성 근접 경고 스팸·상관 폭주의 근원이었다. 이제 기본 GROUP을
+    isr_satellites.CELESTRAK_ISR_GROUPS(=resource, Earth Resources)로 바꾼다. 이 GROUP은
+    ISR 허용목록 전량(Sentinel·KOMPSAT·WorldView·Yaogan·Gaofen 등)을 1회 fetch로 커버한다
+    (근거는 anomaly/isr_satellites.py docstring). GROUP은 CELESTRAK_GROUPS 환경변수로 교체 가능.
+  - **표시층 분리 결정**: 여기서 받아온 GROUP의 **모든** 통과를 OrbitPass로 write한다
+    = 지도 지상궤적 레이어는 전체 카탈로그를 표시한다(주변 위성 전부가 상황인식 맥락).
+    반면 이상징후 승격·correlated_with 상관은 허용목록만(anomaly/rules·correlation에서 게이트).
+    즉 **표시=전체 / 신호 승격=허용목록**. 이 커넥터는 표시 데이터를 만들 뿐, 필터링하지 않는다.
 
 캐시 규율(DR-0005, Celestrak 캐시 존중):
   - 그룹별 TLE를 data/cache/celestrak_<group>.tle 로 저장, mtime < 12h면 재fetch 안 함.
@@ -27,6 +37,7 @@ from typing import Optional
 import httpx
 from sgp4.api import Satrec, jday
 
+from anomaly.isr_satellites import CELESTRAK_ISR_GROUPS
 from ontology.model import KADIZ_BBOX, KADIZ_REGION, OrbitPass, Satellite
 from ontology.store_local import DEFAULT_DB, LocalOntologyStore
 
@@ -36,7 +47,8 @@ TIMEOUT = 30
 # 폴링·계산 상수 (환경변수로 교체 가능) --------------------------------------
 TLE_POLL_INTERVAL = 12 * 3600  # architecture.md: TLE 12h
 CACHE_TTL_SECONDS = 12 * 3600  # 캐시 신선도(= 폴링 주기). 이내면 재fetch 안 함.
-DEFAULT_GROUPS = "stations,visual"  # 경량 그룹(수십~수백 기). DR-0005 스코프.
+# ISR 위성 허용목록을 커버하는 GROUP(SSOT=isr_satellites). 기본 resource(Earth Resources).
+DEFAULT_GROUPS = ",".join(CELESTRAK_ISR_GROUPS)
 HORIZON_HOURS = 12  # 향후 몇 시간의 통과를 계산할지
 STEP_SECONDS = 30  # 전파 시간 간격(통과 판정·지상궤적 해상도)
 

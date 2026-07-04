@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from anomaly.crosscheck import CrossCheckSource, NullCrossCheckSource
+from anomaly.isr_satellites import is_signal_promotable_pass
 from anomaly.military_db import classify_military
 from ontology.geo import haversine_km, path_length_km, region_of_point
 from ontology.model import (
@@ -335,10 +336,17 @@ def detect_satellite_proximity(
 
     P4 발견 #3: 상관 문장으로만 남기지 않고 저신뢰 Anomaly로 승격(evidenced_by OrbitPass,
     involves Satellite). near-overhead(최대앙각≥임계)만 = 실제 근접(전역 통과 나열 아님).
+
+    **ISR 허용목록 게이트(기본 on)**: 허용목록 밖 실 위성(ISS·밝은 위성 등)의 통과는
+    승격하지 않는다 — 이 게이트가 없던 시절 stations/visual 그룹 통과가 전부 저신뢰
+    Anomaly로 승격돼 경고 스팸이 됐다(isr_satellites.py 배경 참조). 합성(synthetic)은
+    우회 → replay 데모 발화 유지. 이 판정은 isr_satellites가 SSOT.
     """
     satellite_map = satellite_map or {}
     out: list[AnomalyDraft] = []
     for p in orbitpasses:
+        if not is_signal_promotable_pass(p.source, p.satellite_ref):
+            continue  # 허용목록 밖 실 위성 → Anomaly 승격 금지(표시는 유지)
         preg = region_map.get(p.region_ref)
         if preg is None or preg.classification not in SENSITIVE_CLASSIFICATIONS:
             continue

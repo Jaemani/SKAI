@@ -98,6 +98,7 @@
     .b-synth { background: #2d2350; color: #c3a9ff; } .b-corr { background: #123a3a; color: #7fe3e3; }
     .b-region { background: #2d2350; color: #c3a9ff; } .b-lowconf { background: #3a2a12; color: #ffc078; }
     .b-stealthmole { background: #1e2d1e; color: #6ec96e; }
+    .b-nolink { background: #2a2a2a; color: #9fa6ad; }
 
     /* 선택 상세 */
     #detail { border-top: 1px solid var(--line); padding: 11px 13px; display: none; overflow-y: auto;
@@ -214,6 +215,7 @@
     #sec-news .sec-hd { color: var(--purple); }
     .news-item { border: 1px solid var(--line); border-left: 4px solid #8a6fff; border-radius: 6px;
       padding: 7px 9px; margin: 6px 0; }
+    .news-item.unlinked { opacity: 0.55; border-left-color: #5a5f66; }
     .news-item .n-title a { color: #dfe6f0; text-decoration: none; font-size: 12px; line-height: 1.4; }
     .news-item .n-title a:hover { text-decoration: underline; }
     .news-item .n-meta { display: flex; justify-content: space-between; gap: 8px; margin-top: 5px;
@@ -636,6 +638,13 @@
     function fmtClock(ts) {
       return new Date(ts * 1000).toLocaleTimeString("ko-KR", { hour12: false, hour: "2-digit", minute: "2-digit" });
     }
+    // 뉴스 전용 — HH:MM만으로는 며칠 전 회고 기사가 방금 기사처럼 보인다(DR-0013 #10).
+    // fmtClock과 동일 시각 해석에 날짜(MM-DD)만 더함 — 다른 fmtClock 사용처는 불변.
+    function fmtNewsTime(ts) {
+      const d = new Date(ts * 1000);
+      const pad = (n) => String(n).padStart(2, "0");
+      return pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+    }
     function esc(s) { return (s == null ? "" : String(s)).replace(/[&<>"]/g,
       (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 
@@ -883,15 +892,19 @@
       list.innerHTML = "";
       for (const n of newsList) {
         const div = document.createElement("div");
-        div.className = "news-item";
-        const region = (n.mentions || []).some((m) => m.type === "Region")
+        const mentions = n.mentions || [];
+        // 링크 없음(mentions 0건) = "왜 걸렸는지 모를" 기사 — 흐리게 + 배지로 구분(DR-0013 #12).
+        div.className = "news-item" + (mentions.length === 0 ? " unlinked" : "");
+        const region = mentions.some((m) => m.type === "Region")
           ? ' <span class="badge b-region">KADIZ 언급</span>' : "";
+        const noLink = mentions.length === 0
+          ? ' <span class="badge b-nolink">링크 없음</span>' : "";
         const dom = (n.attrs && n.attrs.domain) ? n.attrs.domain : n.source;
         const srcBadge = n.source === "stealthmole" ? ' <span class="badge b-stealthmole">다크웹</span>' : "";
         div.innerHTML =
           '<div class="n-title"><a href="' + esc(n.source_url) + '" target="_blank" rel="noopener">' +
           esc(n.title || "(제목 없음)") + "</a></div>" +
-          '<div class="n-meta"><span>' + esc(dom) + " · " + fmtClock(n.ts) + srcBadge + region + "</span>" +
+          '<div class="n-meta"><span>' + esc(dom) + " · " + fmtNewsTime(n.ts) + srcBadge + region + noLink + "</span>" +
           '<span class="badge b-lowconf">신뢰도 ' + n.confidence.toFixed(2) + "</span></div>";
         list.appendChild(div);
       }

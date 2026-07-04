@@ -273,15 +273,35 @@ def weather(store, region_id: str, window: tuple[int, int]) -> list[Fact]:
     return out
 
 
-def news(store, region_id: str, window: tuple[int, int], limit: int = 5) -> list[Fact]:
+# 뉴스 최대 나이(질의창 종료 기준) — 초과 기사는 제외한다. 뉴스는 시간창으로 자르지 않고
+# 회고 보도를 폭넓게 받아들이되(위 news() 독스트링), 상한이 없으면 수개월 전 기사가 "지금"
+# 질의 답변에 최신 기사와 함께 섞여 나가 시간 정직성을 해친다(팀 진단 2026-07-05).
+NEWS_MAX_AGE_HOURS = 48
+NEWS_MAX_AGE_SECONDS = NEWS_MAX_AGE_HOURS * 3600
+
+
+def news(
+    store,
+    region_id: str,
+    window: tuple[int, int],
+    limit: int = 5,
+    max_age_seconds: int = NEWS_MAX_AGE_SECONDS,
+) -> list[Fact]:
     """관심지역을 언급한 뉴스(저신뢰 OSINT). 최신순 상위 limit건.
 
-    cites = [NewsEvent.id]. 뉴스는 OSINT 회고(7d 창)라 질의 시간창으로 자르지 않는다
-    (window로 자르면 대개 0건 — 뉴스는 사건 이후 회고 보도). region mentions 링크 또는
-    entities에 지역이 걸린 뉴스만(엔티티 링킹). confidence ≤ 0.4(확증 아님).
+    cites = [NewsEvent.id]. 뉴스는 OSINT 회고 보도라 질의 시간창(window)으로 자르지 않는다
+    (window로 자르면 대개 0건 — 뉴스는 사건 이후 회고 보도). 다만 질의창 종료 시각 기준
+    max_age_seconds(기본 48h)보다 오래된 기사는 제외한다(오래된 회고가 "지금" 질의에
+    최신 기사와 나란히 섞이는 것 방지). region mentions 링크 또는 entities에 지역이 걸린
+    뉴스만(엔티티 링킹). confidence ≤ 0.4(확증 아님). data.age_seconds = 질의창 종료 기준
+    기사 나이(문장 조립 시 "N시간 전 보도" 표기용).
     """
+    _, end = window
     out: list[Fact] = []
     for n in store.query_news():
+        age = end - n.ts
+        if age > max_age_seconds:
+            continue
         mentions = store.query_mentions(n.id)
         mentions_region = any(
             m["type"] == "Region" and m["id"] == region_id for m in mentions
@@ -301,6 +321,7 @@ def news(store, region_id: str, window: tuple[int, int], limit: int = 5) -> list
                     "source_url": n.source_url,
                     "entities": n.entities,
                     "mentions_region": mentions_region,
+                    "age_seconds": age,
                 },
             )
         )

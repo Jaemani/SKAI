@@ -138,12 +138,19 @@ def _compile_operator_matchers() -> list[tuple[str, str, "re.Pattern | None"]]:
 
     '\\b'는 한글 경계를 못 잡으므로 비-ASCII 별칭은 substring으로 처리한다.
     ASCII 단어경계는 'Korean Air'가 'Korean airline'에 오탐되지 않게 막는다.
+
+    'Korean Air'는 'Korean Air Force'/'South Korean Air Force'의 접두 문자열이라
+    \\b만으로는 뒤에 'Force'가 와도 매칭된다(공군 기사가 민항사 op-kal로 오링크되며
+    confidence까지 오상향 — DR-0013 #11). 뒤에 공백+Force가 오면 배제(부정 전방탐색).
     """
     out: list[tuple[str, str, re.Pattern | None]] = []
     for op_id, aliases in OPERATOR_ALIASES.items():
         for alias in aliases:
             if alias.isascii():
-                pat = re.compile(r"\b" + re.escape(alias) + r"\b", re.IGNORECASE)
+                guard = r"(?!\s+Force\b)" if alias.lower() == "korean air" else ""
+                pat = re.compile(
+                    r"\b" + re.escape(alias) + guard + r"\b", re.IGNORECASE
+                )
                 out.append((op_id, alias, pat))
             else:
                 out.append((op_id, alias, None))

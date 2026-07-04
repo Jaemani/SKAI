@@ -19,6 +19,10 @@
 #   SKAI_POLL_SOURCES  live 폴링 소스(쉼표구분). 기본 opensky,gdelt,metar,celestrak.
 #                      OpenSky-only 회귀는 SKAI_POLL_SOURCES=opensky.
 #   LIVE_MAX_CYCLES    live 폴러 사이클 수. 기본 0=연속(무한, DR-0011). 유한값은 검증용.
+#   SKAI_COPILOT_LLM   문장 서술 백엔드. live 계열은 미설정 시 이 스크립트가 "claude"를
+#                      기본 export(서술 다듬기 — cites·사실 불변, 실패 시 원문 폴백).
+#                      명시적으로 SKAI_COPILOT_LLM=template 등을 넘기면 그 값을 존중한다.
+#                      replay는 절대 건드리지 않음(template 고정 — 결정성·네트워크 0 전제).
 #
 # DB 레짐(3분리 — docs/worklog/db-regime.md SSOT):
 #   data/skai.db                  = 라이브 런타임(실데이터 전용). live 폴러가 씀. 합성 주입 금지
@@ -132,6 +136,14 @@ live() {
   fi
   stop
   local live_db="$DATA/skai.db"          # 런타임 DB(데모 DB와 분리)
+
+  # 데모 LLM 게이트(2026-07-05) — live 계열은 SKAI_COPILOT_LLM 미설정 시 기본 "claude"로
+  # 켜서 조립된 문장의 서술을 다듬는다(_polish_narration, cites·사실은 불변·실패 시 원문
+  # 폴백 — DR-0004). 미설정 기본이 "template"이면 라이브 데모에서도 답변이 기계적 나열로
+  # 보여 발표 임팩트가 떨어진다. 이미 설정돼 있으면 사용자 지정을 존중(덮어쓰지 않음).
+  # replay()는 여기서 export하지 않으므로 영향을 받지 않는다 — replay는 template 고정이
+  # 결정성·네트워크 0 증명의 전제이므로 절대 건드리지 않는다.
+  export SKAI_COPILOT_LLM="${SKAI_COPILOT_LLM:-claude}"
 
   # 서버 — 벽시계 now(정직한 '지금', 앵커 없음), 오프라인 아님(라이브 fetch 필요).
   SKAI_DB="$live_db" SKAI_PORT="$PORT" \

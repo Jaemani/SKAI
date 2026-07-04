@@ -12,10 +12,14 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
+from copilot import tools
 from copilot.assessment import assess, build_subgraph
 from copilot.parser import DEFAULT_WINDOW_SECONDS, parse_query
+from copilot.tools import NEWS_MAX_AGE_SECONDS
 from ontology.model import (
     KADIZ_REGION,
     Aircraft,
@@ -30,6 +34,7 @@ from ontology.model import (
 )
 from ontology.store import SentenceEvidenceError
 from ontology.store_local import LocalOntologyStore
+from server import app as server_app
 
 
 def _store(tmp_path) -> LocalOntologyStore:
@@ -71,14 +76,16 @@ def _seed(store: LocalOntologyStore, now: int):
         },
     )
     store.write_anomaly(a, evidence=[obs.id], involves=["synthx"])
-    # 통과창(이상징후 시각 근방 +5분)
+    # 통과창(이상징후 시각 근방 +5분). ISR 허용목록 위성(Sentinel-1A/39634)을 쓴다 —
+    # correlated_with 승격은 허용목록만 통과하므로(isr_satellites 게이트), 상관 인용을
+    # 검증하려면 허용목록 위성이어야 한다(ISS 25544 같은 비-ISR 위성은 이제 상관되지 않음).
     store.write_satellite(
-        Satellite(norad_id="25544", name="ISS", source_url="http://tle")
+        Satellite(norad_id="39634", name="SENTINEL-1A", source_url="http://tle")
     )
     store.write_orbitpass(
         OrbitPass(
-            id=f"pass-25544-{now + 300}",
-            satellite_ref="25544",
+            id=f"pass-39634-{now + 300}",
+            satellite_ref="39634",
             region_ref="KADIZ",
             start_ts=now + 300,
             end_ts=now + 400,
@@ -322,3 +329,224 @@ def test_delete_future_orbitpasses_preserves_past(tmp_path):
     assert remaining == ["pass-25544-999500"]  # 과거 1건 보존
     # 미래 pass의 of/over 링크도 제거 → 과거 pass의 of+over(2개)만 남음
     assert store.counts()["link"] == 2
+
+
+# ──────────────────────────────────────────────
+# 6. 시간 정직성 — 뉴스 나이 필터 · 위성 서술 창 제한 (2026-07-05)
+# ──────────────────────────────────────────────
+def test_tools_news_excludes_stale_articles(tmp_path):
+    """tools.news()는 질의창 종료 기준 48h보다 오래된 기사를 제외한다."""
+    store = _store(tmp_path)
+    store.write_region(KADIZ_REGION)
+    now = 1783000000
+    store.write_newsevent(
+        NewsEvent(
+            id="news-fresh",
+            source="synthetic",
+            source_url="synthetic://x/fresh",
+            ts=now - 1000,  # 신선(48h 이내)
+            title="fresh",
+            confidence=0.35,
+            entities=["KADIZ"],
+        )
+    )
+    store.write_newsevent(
+        NewsEvent(
+            id="news-stale",
+            source="synthetic",
+            source_url="synthetic://x/stale",
+            ts=now - 50 * 3600,  # 50시간 전(48h 초과) → 제외 대상
+            title="stale",
+            confidence=0.35,
+            entities=["KADIZ"],
+        )
+    )
+    facts = tools.news(store, "KADIZ", (now - 1800, now))
+    ids = [f.data["id"] for f in facts]
+    assert "news-fresh" in ids
+    assert "news-stale" not in ids
+
+
+def test_tools_news_age_boundary_inclusive(tmp_path):
+    """나이가 정확히 상한(48h)이면 포함, 1초라도 넘으면 제외(경계 명확화)."""
+    store = _store(tmp_path)
+    store.write_region(KADIZ_REGION)
+    now = 1783000000
+    store.write_newsevent(
+        NewsEvent(
+            id="news-exact",
+            source="synthetic",
+            source_url="synthetic://x/exact",
+            ts=now - NEWS_MAX_AGE_SECONDS,  # 정확히 상한
+            title="exact",
+            confidence=0.35,
+            entities=["KADIZ"],
+        )
+    )
+    store.write_newsevent(
+        NewsEvent(
+            id="news-overby1",
+            source="synthetic",
+            source_url="synthetic://x/overby1",
+            ts=now - NEWS_MAX_AGE_SECONDS - 1,  # 상한 + 1초
+            title="overby1",
+            confidence=0.35,
+            entities=["KADIZ"],
+        )
+    )
+    facts = tools.news(store, "KADIZ", (now - 1800, now))
+    ids = [f.data["id"] for f in facts]
+    assert "news-exact" in ids
+    assert "news-overby1" not in ids
+
+
+def test_assess_news_sentence_excludes_stale_and_states_age(tmp_path):
+    """assess() 응답의 뉴스 문장 — 오래된 기사는 빠지고, 남은 기사엔 경과시간이 명시된다."""
+    store = _store(tmp_path)
+    store.write_region(KADIZ_REGION)
+    now = 1783000000
+    store.write_newsevent(
+        NewsEvent(
+            id="news-fresh2",
+            source="synthetic",
+            source_url="synthetic://x/fresh2",
+            ts=now - 3600,  # 1시간 전
+            title="최근 KADIZ 동향 보도",
+            confidence=0.35,
+            entities=["KADIZ"],
+        )
+    )
+    store.write_newsevent(
+        NewsEvent(
+            id="news-old2",
+            source="synthetic",
+            source_url="synthetic://x/old2",
+            ts=now - 200 * 3600,  # 200시간 전(48h 훨씬 초과)
+            title="아주 오래된 KADIZ 보도",
+            confidence=0.35,
+            entities=["KADIZ"],
+        )
+    )
+    r = assess(store, "지금 KADIZ 뉴스 있어?", now=now)
+    assert not r["no_evidence"]
+    news_sents = [s for s in r["sentences"] if s["kind"] == "news"]
+    assert news_sents, "뉴스 문장 없음"
+    text = news_sents[0]["text"]
+    assert "최근 KADIZ 동향 보도" in text
+    assert "아주 오래된 KADIZ 보도" not in text
+    assert (
+        "전 보도" in text
+    )  # 경과시간 명시("약 N시간 전 보도" 또는 "1시간 미만 전 보도")
+    assert "news-old2" not in news_sents[0]["cites"]
+
+
+def test_api_news_excludes_stale_articles(tmp_path, monkeypatch):
+    """/api/news(server.app.api_news)도 copilot과 동일한 48h 상한을 적용한다(DR-0013 #10).
+
+    이전에는 store.query_news() 전체를 무필터 반환해, 웹 뉴스 패널에 며칠 전 기사가
+    무제한 노출됐다(코파일럿 경로만 48h 컷이 있던 불일치).
+    """
+    store = _store(tmp_path)
+    monkeypatch.setattr(server_app, "DB_PATH", str(tmp_path / "p4.db"))
+    monkeypatch.delenv("SKAI_NOW_ANCHOR", raising=False)
+    now = 1783000000
+    store.write_newsevent(
+        NewsEvent(
+            id="news-web-fresh",
+            source="synthetic",
+            source_url="synthetic://x/web-fresh",
+            ts=now - 1000,  # 신선(48h 이내)
+            title="fresh",
+            confidence=0.35,
+        )
+    )
+    store.write_newsevent(
+        NewsEvent(
+            id="news-web-stale",
+            source="synthetic",
+            source_url="synthetic://x/web-stale",
+            ts=now - 50 * 3600,  # 50시간 전(48h 초과) → 제외 대상
+            title="stale",
+            confidence=0.35,
+        )
+    )
+    monkeypatch.setattr(time, "time", lambda: float(now))  # 벽시계 now 고정
+    ids = [d["id"] for d in server_app.api_news()]
+    assert "news-web-fresh" in ids
+    assert "news-web-stale" not in ids
+
+
+def test_api_news_uses_now_anchor_for_age(tmp_path, monkeypatch):
+    """replay 모드(SKAI_NOW_ANCHOR 설정)는 벽시계가 아니라 앵커 시각 기준으로 나이를 잰다.
+
+    앵커 없이 벽시계로 계산하면 replay 재현성이 깨진다(항상 "지금" 실행 시각 기준이 되어
+    같은 데모 DB라도 실행 시점마다 어느 기사가 살아남는지 달라짐).
+    """
+    store = _store(tmp_path)
+    monkeypatch.setattr(server_app, "DB_PATH", str(tmp_path / "p4.db"))
+    anchor = 1783000000
+    monkeypatch.setenv("SKAI_NOW_ANCHOR", str(anchor))
+    store.write_newsevent(
+        NewsEvent(
+            id="news-anchor-fresh",
+            source="synthetic",
+            source_url="synthetic://x/anchor-fresh",
+            ts=anchor - 1000,  # 앵커 기준 신선(48h 이내)
+            title="anchor-fresh",
+            confidence=0.35,
+        )
+    )
+    # 벽시계를 앵커보다 훨씬 미래로 돌려도(가상의 "실제 지금"), 앵커 기준 신선한 기사는
+    # 여전히 포함되어야 한다(벽시계 기준이었다면 이미 상한을 초과해 제외됐을 것).
+    monkeypatch.setattr(time, "time", lambda: float(anchor + 365 * 86400))
+    ids = [d["id"] for d in server_app.api_news()]
+    assert "news-anchor-fresh" in ids
+
+
+def test_satellite_context_sentence_limited_to_query_window(tmp_path):
+    """비상관 위성 통과 맥락 문장(KIND_SATELLITE)은 실제 질의창과 겹치는 통과만 인용한다.
+
+    _parallel_read는 상관 계산용으로 ±CORRELATION_WINDOW_SECONDS(1h)만큼 넓혀 위성을
+    읽으므로 counts.passes에는 창 밖 통과도 잡히지만("지금"=30분 창인데 최대 2.5시간치가
+    잡힘), 서술 문장에는 실제 질의창과 겹치는 통과만 나와야 한다(시간 정직성).
+    """
+    store = _store(tmp_path)
+    store.write_region(KADIZ_REGION)
+    store.write_satellite(
+        Satellite(norad_id="25544", name="ISS", source_url="http://tle")
+    )
+    now = 1783000000
+    # 질의창(지금=[now-1800, now])과 실제로 겹치는 통과.
+    store.write_orbitpass(
+        OrbitPass(
+            id="pass-25544-inwin",
+            satellite_ref="25544",
+            region_ref="KADIZ",
+            start_ts=now - 200,
+            end_ts=now - 100,
+            max_elevation=60.0,
+            ground_track=[[36, 127]],
+            source_url="http://tle",
+        )
+    )
+    # 확장 읽기 창(±1h)에는 걸리지만 실제 질의창 밖인 통과(이상징후가 없어 상관도 안 걸림).
+    store.write_orbitpass(
+        OrbitPass(
+            id="pass-25544-outwin",
+            satellite_ref="25544",
+            region_ref="KADIZ",
+            start_ts=now + 2000,
+            end_ts=now + 2100,
+            max_elevation=70.0,
+            ground_track=[[36, 127]],
+            source_url="http://tle",
+        )
+    )
+    r = assess(store, "지금 KADIZ 근방 이상한 거 있어?", now=now)
+    assert not r["no_evidence"]
+    assert r["counts"]["passes"] == 2  # 확장 읽기는 둘 다 잡는다(상관 계산용, 불변)
+    sat_sents = [s for s in r["sentences"] if s["kind"] == "satellite"]
+    assert sat_sents, "위성 맥락 문장 없음"
+    cites = sat_sents[0]["cites"]
+    assert "pass-25544-inwin" in cites
+    assert "pass-25544-outwin" not in cites  # 질의창 밖 통과는 서술에서 제외

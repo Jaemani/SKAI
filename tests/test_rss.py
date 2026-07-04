@@ -156,6 +156,22 @@ def test_match_operators_word_boundary_no_false_positive():
     assert [m.dst_id for m in ms] == []
 
 
+def test_match_operators_korean_air_force_not_linked_to_airline():
+    # DR-0013 #11 회귀: "Korean Air"가 \b만으로는 "...Air Force"의 접두 문자열이라
+    # 매칭돼 공군 기사가 민항사(op-kal)로 오링크됐다. "Force"가 뒤따르면 배제해야 한다.
+    ms = el.match_operators("South Korean Air Force jets entered the zone")
+    ids = {m.dst_id for m in ms}
+    assert "op-rokaf" in ids
+    assert "op-kal" not in ids
+
+
+def test_match_operators_korean_air_normal_match_preserved():
+    # 회귀 방지: 위 배제 규칙이 정상 매칭("Korean Air flight ...")까지 깨뜨리면 안 된다.
+    ms = el.match_operators("Korean Air flight KE123 diverted")
+    ids = {m.dst_id for m in ms}
+    assert "op-kal" in ids
+
+
 # ── A5: 항공기 실존 대조 ─────────────────────────────────────────────────────
 
 

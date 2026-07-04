@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from anomaly.isr_satellites import is_signal_promotable_pass
 from ontology.geo import haversine_km, point_in_region
 
 # 시공간 버킷 창.
@@ -33,6 +34,19 @@ def _overlaps(a_start: int, a_end: int, b_start: int, b_end: int) -> bool:
     return a_start <= b_end and a_end >= b_start
 
 
+def _pass_time_delta(a_ts: int, p_start: int, p_end: int) -> int:
+    """이상징후 시각과 통과창 [p_start,p_end]의 시간차(초). 창 안이면 0.
+
+    음수 = 이상징후가 통과 진입보다 이름, 양수 = 통과 이탈보다 늦음(가장 가까운 창 경계 기준).
+    "왜 상관인가"의 시간 근접도를 UI가 표시하도록 correlated_with 사유에 싣는다.
+    """
+    if a_ts < p_start:
+        return a_ts - p_start
+    if a_ts > p_end:
+        return a_ts - p_end
+    return 0
+
+
 def _regions_containing(regions: list, lat, lon) -> set[str]:
     """점을 포함하는 모든 Region id (OpArea·ADIZ 중첩 시 여러 개)."""
     if lat is None or lon is None:
@@ -43,8 +57,8 @@ def _regions_containing(regions: list, lat, lon) -> set[str]:
 def correlate(store, anomalies: list, now: Optional[int] = None) -> list[dict]:
     """주어진 이상징후들을 다른 이상징후·뉴스·위성통과와 시공간 버킷으로 상관 → 링크 영속.
 
-    반환: 이번에 주장(assert)된 correlated_with 엣지 리스트 {src_id, dst_type, dst_id}
-    (INSERT OR IGNORE라 재실행에도 멱등). copilot·injector가 공용으로 호출한다.
+    반환: 이번에 주장(assert)된 correlated_with 엣지 리스트 {src_id, dst_type, dst_id, reason}
+    (reason = 시간차·공간관계 사유 dict). 재실행에도 멱등(같은 링크 upsert). copilot·injector 공용.
     """
     if not anomalies:
         return []
@@ -60,13 +74,35 @@ def correlate(store, anomalies: list, now: Optional[int] = None) -> list[dict]:
         a_region_ids = _regions_containing(regions, a.lat, a.lon)
 
         # ── 이상징후 ↔ 위성통과: 이상징후 점이 통과 Region 안 + 시간 겹침 ──
+        # ISR 허용목록 게이트(기본 on): 허용목록 밖 실 위성(ISS·밝은 위성)의 통과와는
+        # 상관을 만들지 않는다 — 이 게이트가 없던 시절 OrbitPass 홍수가 시공간 버킷과
+        # 곱해져 한 이상징후에 correlated_with 수십 건이 붙어 상관이 노이즈가 됐다.
+        # 합성(synthetic)은 우회(replay 데모의 은닉 정황 서사 유지). 판정 SSOT=isr_satellites.
         for p in passes:
+            if not is_signal_promotable_pass(p.source, p.satellite_ref):
+                continue  # 허용목록 밖 실 위성 → 상관 생성 금지(표시는 유지)
             preg = region_map.get(p.region_ref)
             if preg is None or not point_in_region(a.lat, a.lon, preg):
                 continue
             if _overlaps(p.start_ts, p.end_ts, a.ts - W, a.ts + W):
-                store.link("Anomaly", a.id, CORRELATED_WITH, "OrbitPass", p.id)
-                edges.append({"src_id": a.id, "dst_type": "OrbitPass", "dst_id": p.id})
+                reason = {
+                    "kind": "anomaly_orbitpass",
+                    "dt_s": _pass_time_delta(a.ts, p.start_ts, p.end_ts),
+                    "region": preg.id,
+                    "max_elevation": p.max_elevation,
+                    "norad_id": p.satellite_ref,
+                }
+                store.link(
+                    "Anomaly", a.id, CORRELATED_WITH, "OrbitPass", p.id, attrs=reason
+                )
+                edges.append(
+                    {
+                        "src_id": a.id,
+                        "dst_type": "OrbitPass",
+                        "dst_id": p.id,
+                        "reason": reason,
+                    }
+                )
 
         # ── 이상징후 ↔ 뉴스: 같은 Region 언급 + 시간 근접(콜사인 비의존) ──
         for n in news:
@@ -75,9 +111,24 @@ def correlate(store, anomalies: list, now: Optional[int] = None) -> list[dict]:
             mentioned = {
                 m["id"] for m in store.query_mentions(n.id) if m["type"] == "Region"
             }
-            if a_region_ids & mentioned:
-                store.link("Anomaly", a.id, CORRELATED_WITH, "NewsEvent", n.id)
-                edges.append({"src_id": a.id, "dst_type": "NewsEvent", "dst_id": n.id})
+            shared = a_region_ids & mentioned
+            if shared:
+                reason = {
+                    "kind": "anomaly_news",
+                    "dt_s": a.ts - n.ts,  # 음수 = 이상징후가 기사보다 이름
+                    "shared_regions": sorted(shared),
+                }
+                store.link(
+                    "Anomaly", a.id, CORRELATED_WITH, "NewsEvent", n.id, attrs=reason
+                )
+                edges.append(
+                    {
+                        "src_id": a.id,
+                        "dst_type": "NewsEvent",
+                        "dst_id": n.id,
+                        "reason": reason,
+                    }
+                )
 
         # ── 이상징후 ↔ 이상징후: 시간 ±창 + 공간 근접(정준방향으로 1개만 저장) ──
         for b in all_anoms:
@@ -87,11 +138,26 @@ def correlate(store, anomalies: list, now: Optional[int] = None) -> list[dict]:
                 continue
             if a.lat is None or b.lat is None:
                 continue
-            if haversine_km(a.lat, a.lon, b.lat, b.lon) > SPATIAL_CORRELATION_KM:
+            dist = haversine_km(a.lat, a.lon, b.lat, b.lon)
+            if dist > SPATIAL_CORRELATION_KM:
                 continue
             src_id, dst_id = sorted([a.id, b.id])  # 대칭 → 정준방향 1개
-            store.link("Anomaly", src_id, CORRELATED_WITH, "Anomaly", dst_id)
-            edges.append({"src_id": src_id, "dst_type": "Anomaly", "dst_id": dst_id})
+            reason = {
+                "kind": "anomaly_anomaly",
+                "gap_s": abs(a.ts - b.ts),  # 대칭 관계라 절대 시간차
+                "distance_km": round(dist, 1),
+            }
+            store.link(
+                "Anomaly", src_id, CORRELATED_WITH, "Anomaly", dst_id, attrs=reason
+            )
+            edges.append(
+                {
+                    "src_id": src_id,
+                    "dst_type": "Anomaly",
+                    "dst_id": dst_id,
+                    "reason": reason,
+                }
+            )
 
     return edges
 
