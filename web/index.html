@@ -3,194 +3,385 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>SKAI Air ISR — P4 코파일럿 (KADIZ)</title>
+  <title>SKAI Air ISR — 공중 융합 코파일럿 (KADIZ)</title>
   <!-- vanilla Leaflet (빌드 없음, DR-0003) -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
-    html, body { margin: 0; height: 100%; font-family: -apple-system, "Segoe UI", sans-serif; }
-    #map { height: 100%; width: 100%; background: #0b1622; }
-    .card {
-      position: absolute; z-index: 1000;
-      background: rgba(12, 22, 34, 0.94); color: #dbe7f3;
-      padding: 12px 14px; border-radius: 8px; font-size: 13px;
-      line-height: 1.55; box-shadow: 0 2px 10px rgba(0,0,0,0.45);
+    :root {
+      --bg:#070e17; --panel:#0c1622; --panel-2:#0e1a28; --line:#22384f;
+      --line-soft:#1a2c3f; --txt:#dbe7f3; --muted:#8ea3ba; --muted-2:#6f849a;
+      --blue:#6fb4ff; --green:#7ce0a8; --red:#ff6b6b; --cyan:#38d9d9;
+      --amber:#ffd166; --purple:#c3a9ff;
+      --rail-l:340px; --rail-r:322px;
     }
-    /* 우상단 통계 패널 */
-    #panel { top: 12px; right: 12px; min-width: 190px; }
-    #panel h1 { font-size: 14px; margin: 0 0 6px; color: #6fb4ff; }
-    #panel .row { display: flex; justify-content: space-between; gap: 12px; }
-    #panel .k { color: #93a7bd; }
-    #panel .legend { margin-top: 8px; border-top: 1px solid #24384f; padding-top: 8px; }
-    #panel .legend span { display: inline-block; width: 22px; height: 0; vertical-align: middle; margin-right: 6px; }
-    #panel .l-track { border-top: 3px solid #35c26b; }
-    #panel .l-gap { border-top: 3px dashed #ff6b6b; }
-    #panel .l-ac { width: 10px; height: 10px; border-radius: 50%; background: #ffd166; border: 1px solid #7a5c00; }
-    #panel .l-anom { width: 12px; height: 12px; border-radius: 50%; background: #ff3b3b; border: 2px solid #ffd0d0; }
-    #panel .l-sat { border-top: 3px dashed #38d9d9; }
-    #panel .l-oparea { width: 12px; height: 9px; background: #7a4a12; border: 1px solid #ffa94d; }
-    #panel #type-legend { margin-top: 8px; border-top: 1px solid #24384f; padding-top: 6px; display: flex; flex-wrap: wrap; gap: 5px 8px; }
-    #panel #type-legend .tchip { display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; color: #b9c8d8; }
-    #panel #type-legend .tchip i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
-    #panel .stamp { margin-top: 8px; color: #7d93aa; font-size: 11px; }
-    /* 위성 궤적 토글 + 소스별 카운트 */
-    #panel .toggle { margin-top: 8px; display: flex; align-items: center; gap: 6px; font-size: 12px; color: #93a7bd; }
-    #panel .toggle input { accent-color: #38d9d9; }
-    #panel .src { margin-top: 8px; border-top: 1px solid #24384f; padding-top: 8px; }
-    #panel .src .st { color: #6fb4ff; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 4px; }
-    #panel .src .row { font-size: 12px; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; overflow: hidden;
+      font-family: -apple-system, "Segoe UI", "Apple SD Gothic Neo", sans-serif;
+      background: var(--bg); color: var(--txt); }
+    button { font-family: inherit; }
 
-    /* 우하단 기상 카드 */
-    #weather { bottom: 12px; right: 12px; width: 224px; }
-    #weather h1 { font-size: 13px; margin: 0 0 6px; color: #6fd0ff; }
-    #weather .row { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; margin: 2px 0; }
-    #weather .k { color: #93a7bd; }
-    #weather .cat { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 10px; font-weight: 600; }
-    #weather .cat-VFR { background: #163a2a; color: #7ce0a8; }
-    #weather .cat-MVFR { background: #183a52; color: #7ac4ff; }
-    #weather .cat-IFR { background: #4a3a12; color: #ffce7a; }
-    #weather .cat-LIFR { background: #5a1414; color: #ff9a9a; }
-    #weather .raw { margin-top: 6px; color: #7d93aa; font-size: 10.5px; word-break: break-all; }
-    #weather .empty { color: #7d93aa; font-size: 12px; }
+    /* ══ 앱 셸 (그리드: 헤더 · 본문 · 코파일럿 도크) ══ */
+    #app { display: grid; grid-template-rows: auto 1fr auto; height: 100%; width: 100%; }
+    #body { position: relative; min-height: 0; display: grid;
+      grid-template-columns: var(--rail-l) 1fr var(--rail-r);
+      transition: grid-template-columns 0.18s ease; }
+    #body.no-left  { grid-template-columns: 0 1fr var(--rail-r); }
+    #body.no-right { grid-template-columns: var(--rail-l) 1fr 0; }
+    #body.no-left.no-right { grid-template-columns: 0 1fr 0; }
 
-    /* 좌하단 뉴스 패널 (저신뢰 OSINT) */
-    #news { bottom: 12px; left: 12px; width: 320px; max-height: 36vh; display: flex; flex-direction: column; padding: 0; }
-    #news .hdr { padding: 10px 14px 8px; border-bottom: 1px solid #24384f; }
-    #news .hdr h1 { font-size: 13px; margin: 0; color: #c3a9ff; }
-    #news .hdr .sub { color: #93a7bd; font-size: 11px; margin-top: 3px; }
-    #news-list { overflow-y: auto; padding: 6px; }
-    #news-list .empty { color: #7d93aa; padding: 10px; font-size: 12px; }
-    .news-item { border: 1px solid #24384f; border-left: 4px solid #8a6fff; border-radius: 6px; padding: 7px 10px; margin: 6px; }
-    .news-item .n-title { color: #dfe6f0; font-size: 12px; line-height: 1.4; }
-    .news-item .n-title a { color: #dfe6f0; text-decoration: none; }
-    .news-item .n-title a:hover { text-decoration: underline; }
-    .news-item .n-meta { display: flex; justify-content: space-between; gap: 8px; margin-top: 5px; color: #93a7bd; font-size: 10.5px; align-items: center; }
-    .b-lowconf { background: #3a2a12; color: #ffc078; }
-    .b-region { background: #2d2350; color: #c3a9ff; }
-    .b-stealthmole { background: #1e2d1e; color: #6ec96e; }
+    /* ══ 헤더바 ══ */
+    #topbar { display: flex; align-items: center; gap: 14px; padding: 8px 14px;
+      background: linear-gradient(180deg,#0c1826,#0a1420); border-bottom: 1px solid var(--line);
+      z-index: 1200; }
+    #topbar .brand { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
+    #topbar .brand .logo { font-size: 15px; font-weight: 800; letter-spacing: 0.5px;
+      color: #eaf3ff; white-space: nowrap; }
+    #topbar .brand .logo b { color: var(--cyan); }
+    #topbar .brand .tag { font-size: 11.5px; color: var(--muted);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #topbar .spacer { flex: 1; }
+    #topbar .region-chip { font-size: 12px; color: #cfe0f0; background: #12233a;
+      border: 1px solid #24425f; border-radius: 14px; padding: 3px 11px; white-space: nowrap; }
+    #topbar .region-chip b { color: var(--blue); }
 
-    /* 좌상단 이상징후 타임라인 */
-    #timeline { top: 12px; left: 12px; width: 320px; max-height: 56vh;
-      display: flex; flex-direction: column; padding: 0; }
-    #timeline .hdr { padding: 12px 14px 8px; border-bottom: 1px solid #24384f; }
-    #timeline .hdr h1 { font-size: 14px; margin: 0; color: #ff8a8a; }
-    #timeline .hdr .sub { color: #93a7bd; font-size: 11px; margin-top: 3px; }
+    /* LIVE / 재생 모드 상태 */
+    #live { display: flex; align-items: center; gap: 7px; font-size: 12px;
+      background: #0e1c2a; border: 1px solid #24384f; border-radius: 14px; padding: 3px 11px; }
+    #live .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted-2);
+      box-shadow: 0 0 0 0 rgba(0,0,0,0); flex: none; }
+    #live.on   .dot { background: #35d07a; animation: livedot 1.4s ease-in-out infinite; }
+    #live.replay .dot { background: var(--amber); }
+    #live.stale  .dot { background: #ff7b54; }
+    #live .lab { font-weight: 700; letter-spacing: 0.4px; }
+    #live.on .lab { color: #6ee6a0; } #live.replay .lab { color: var(--amber); }
+    #live.stale .lab { color: #ff9a7a; }
+    #live .ago { color: var(--muted); }
+    @keyframes livedot { 0%,100%{opacity:1} 50%{opacity:0.22} }
+    #topbar .tbtn { background: #12233a; border: 1px solid #24425f; color: #cfe0f0;
+      border-radius: 7px; padding: 5px 9px; font-size: 12px; cursor: pointer; white-space: nowrap; }
+    #topbar .tbtn:hover { background: #1a3450; }
+    #topbar .tbtn.on { background: #1d3d5c; border-color: #3a6390; color: #eaf3ff; }
+    #topbar .tbtn .ic { font-size: 12px; }
+
+    /* ══ 공통 패널(레일 카드) ══ */
+    aside.rail { min-width: 0; overflow: hidden; background: var(--panel);
+      display: flex; flex-direction: column; }
+    #left-rail  { border-right: 1px solid var(--line); }
+    #right-rail { border-left: 1px solid var(--line); overflow-y: auto; }
+    .zone-num { display: inline-flex; align-items: center; justify-content: center;
+      width: 17px; height: 17px; border-radius: 50%; background: #1d3350; color: #9fd0ff;
+      font-size: 10.5px; font-weight: 800; margin-right: 6px; flex: none; }
+    .panel-hd { padding: 10px 13px 8px; border-bottom: 1px solid var(--line); }
+    .panel-hd h1 { font-size: 13.5px; margin: 0; display: flex; align-items: center; }
+    .panel-hd .sub { color: var(--muted); font-size: 10.5px; margin-top: 3px; line-height: 1.4; }
+
+    /* ── 좌: 이상징후 타임라인 ── */
+    #left-rail .panel-hd h1 { color: #ff9a9a; }
     #tl-list { overflow-y: auto; padding: 6px; }
-    #tl-list .empty { color: #7d93aa; padding: 10px; font-size: 12px; }
-    .anom-item {
-      border: 1px solid #24384f; border-left: 4px solid #ff3b3b;
-      border-radius: 6px; padding: 8px 10px; margin: 6px; cursor: pointer;
-      transition: background 0.12s;
-    }
-    .anom-item:hover { background: rgba(60, 90, 130, 0.22); }
-    .anom-item.sel { background: rgba(80, 120, 170, 0.30); border-color: #6fb4ff; }
+    #tl-list .empty { color: var(--muted-2); padding: 14px 12px; font-size: 12px; line-height: 1.6;
+      text-align: center; }
+    #tl-list .empty code { color: #9fc4e8; background: #12233a; padding: 1px 5px; border-radius: 4px; }
+    .anom-item { border: 1px solid var(--line); border-left: 4px solid #ff3b3b;
+      border-radius: 6px; padding: 8px 10px; margin: 6px; cursor: pointer; transition: background 0.12s; }
+    .anom-item:hover { background: rgba(60, 90, 130, 0.2); }
+    .anom-item.sel { background: rgba(80, 120, 170, 0.3); border-color: var(--blue); }
     .anom-item.st-confirmed { border-left-color: #c0392b; }
     .anom-item.st-dismissed { border-left-color: #6b7a8d; opacity: 0.6; }
     .anom-item.st-dismissed .a-title { text-decoration: line-through; }
-    .anom-item .a-title { font-weight: 600; color: #ffd7d7; }
-    .anom-item .a-meta { color: #93a7bd; font-size: 11px; margin-top: 3px;
-      display: flex; justify-content: space-between; gap: 8px; }
-    .badge { display: inline-block; padding: 1px 7px; border-radius: 10px;
-      font-size: 10px; font-weight: 600; }
-    .b-candidate { background: #4a3a12; color: #ffce7a; }
-    .b-confirmed { background: #5a1414; color: #ff9a9a; }
-    .b-dismissed { background: #2a333d; color: #9fb0c2; }
-    .b-conf { background: #163a2a; color: #7ce0a8; }
-    .b-synth { background: #2d2350; color: #c3a9ff; }
-    .b-corr { background: #123a3a; color: #7fe3e3; }
-    #detail .corr {
-      border: 1px solid #1c4a4a; border-left: 3px solid #38d9d9; border-radius: 5px;
-      padding: 5px 8px; margin: 4px 0; font-size: 11.5px; background: rgba(18, 46, 46, 0.5);
-    }
+    .anom-item .a-title { font-weight: 600; color: #ffd7d7; font-size: 12.5px; }
+    .anom-item .a-meta { color: var(--muted); font-size: 11px; margin-top: 4px;
+      display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+    .badge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 10px; font-weight: 600; }
+    .b-candidate { background: #4a3a12; color: #ffce7a; } .b-confirmed { background: #5a1414; color: #ff9a9a; }
+    .b-dismissed { background: #2a333d; color: #9fb0c2; } .b-conf { background: #163a2a; color: #7ce0a8; }
+    .b-synth { background: #2d2350; color: #c3a9ff; } .b-corr { background: #123a3a; color: #7fe3e3; }
+    .b-region { background: #2d2350; color: #c3a9ff; } .b-lowconf { background: #3a2a12; color: #ffc078; }
+    .b-stealthmole { background: #1e2d1e; color: #6ec96e; }
+
+    /* 선택 상세 */
+    #detail { border-top: 1px solid var(--line); padding: 11px 13px; display: none; overflow-y: auto;
+      max-height: 42%; }
+    #detail .d-expl { color: #cfe0f0; font-size: 12.5px; margin: 2px 0 8px; line-height: 1.55; }
+    #detail .d-sect { color: var(--blue); font-size: 10.5px; text-transform: uppercase;
+      letter-spacing: 0.4px; margin: 9px 0 4px; }
+    #detail .ev { border: 1px solid var(--line); border-radius: 5px; padding: 6px 8px; margin: 4px 0;
+      font-size: 11.5px; background: rgba(20, 34, 50, 0.6); }
+    #detail .ev .ev-h { color: var(--txt); font-weight: 600; }
+    #detail .ev a { color: var(--blue); word-break: break-all; }
+    #detail .corr { border: 1px solid #1c4a4a; border-left: 3px solid var(--cyan); border-radius: 5px;
+      padding: 5px 8px; margin: 4px 0; font-size: 11.5px; background: rgba(18, 46, 46, 0.5); }
     #detail .corr .ct { color: #8fe4e4; font-weight: 600; }
-
-    /* 선택 상세 (타임라인 하단) */
-    #detail { border-top: 1px solid #24384f; padding: 12px 14px; display: none; }
-    #detail .d-expl { color: #cfe0f0; font-size: 12.5px; margin: 4px 0 8px; }
-    #detail .d-sect { color: #6fb4ff; font-size: 11px; text-transform: uppercase;
-      letter-spacing: 0.4px; margin: 8px 0 4px; }
-    #detail .ev {
-      border: 1px solid #24384f; border-radius: 5px; padding: 6px 8px; margin: 4px 0;
-      font-size: 11.5px; background: rgba(20, 34, 50, 0.6);
-    }
-    #detail .ev .ev-h { color: #dbe7f3; font-weight: 600; }
-    #detail .ev a { color: #6fb4ff; word-break: break-all; }
+    #detail .flowhint { font-size: 10.5px; color: #d9b25a; margin: 6px 0 2px; }
     #detail .actions { display: flex; gap: 8px; margin-top: 10px; }
-    #detail button {
-      flex: 1; padding: 7px 0; border: none; border-radius: 6px; cursor: pointer;
-      font-size: 12px; font-weight: 600; color: #fff;
-    }
-    #detail .btn-confirm { background: #c0392b; }
-    #detail .btn-confirm:hover { background: #d84a3a; }
-    #detail .btn-dismiss { background: #45525f; }
-    #detail .btn-dismiss:hover { background: #566370; }
+    #detail button { flex: 1; padding: 7px 0; border: none; border-radius: 6px; cursor: pointer;
+      font-size: 12px; font-weight: 600; color: #fff; }
+    #detail .btn-confirm { background: #c0392b; } #detail .btn-confirm:hover { background: #d84a3a; }
+    #detail .btn-dismiss { background: #45525f; } #detail .btn-dismiss:hover { background: #566370; }
     #detail button:disabled { opacity: 0.45; cursor: default; }
-    #detail .backend { color: #7d93aa; font-size: 10.5px; margin-top: 8px; }
+    #detail .backend { color: var(--muted-2); font-size: 10.5px; margin-top: 8px; }
 
-    /* 하단 중앙: 코파일럿 채팅 (P4) */
-    #chat { bottom: 12px; left: 50%; transform: translateX(-50%);
-      width: min(700px, 58vw); max-height: 66vh; display: flex; flex-direction: column; padding: 0; }
-    #chat .hdr { padding: 10px 14px 8px; border-bottom: 1px solid #24384f;
-      display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
-    #chat .hdr h1 { font-size: 14px; margin: 0; color: #7ce0a8; }
-    #chat .hdr .sub { color: #93a7bd; font-size: 11px; }
-    #chat-body { overflow-y: auto; padding: 4px 12px 8px; }
-    #chat .empty { color: #7d93aa; padding: 12px 2px; font-size: 12px; }
-    #chat .parsed { font-size: 11px; color: #93a7bd; margin: 8px 0 2px;
-      border: 1px dashed #2a3f57; border-radius: 6px; padding: 6px 8px; }
-    #chat .parsed b { color: #7ac4ff; }
-    #chat .a-head { display: flex; justify-content: space-between; align-items: center;
-      margin: 8px 0 2px; gap: 8px; }
-    #chat .a-head .conf { font-size: 11px; color: #93a7bd; }
-    .a-sent { border-left: 3px solid #35506e; padding: 5px 0 5px 10px; margin: 7px 0; }
-    .a-sent .a-text { color: #e5edf6; font-size: 12.8px; line-height: 1.5; }
-    .a-sent .a-foot { margin-top: 5px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
-    .kind-badge { display: inline-block; padding: 1px 7px; border-radius: 9px;
-      font-size: 9.5px; font-weight: 700; letter-spacing: 0.3px; }
-    .cite-chip { cursor: pointer; background: #16283c; border: 1px solid #2a445f;
-      color: #9fc4e8; border-radius: 9px; padding: 1px 7px; font-size: 10px; }
+    /* ── 지도 ── */
+    #map-wrap { position: relative; min-width: 0; }
+    #map { height: 100%; width: 100%; background: #0b1622; }
+    .map-badge { position: absolute; z-index: 600; background: rgba(9,17,27,0.82);
+      border: 1px solid var(--line); border-radius: 8px; color: #cfe0f0; backdrop-filter: blur(2px); }
+    /* 좌상단 범례 (접이식) */
+    #legend { top: 10px; left: 10px; font-size: 11px; max-width: 210px; }
+    #legend .lg-hd { padding: 6px 10px; cursor: pointer; display: flex; align-items: center; gap: 6px;
+      font-weight: 700; color: #bcd3ea; }
+    #legend .lg-hd .chev { margin-left: auto; color: var(--muted); font-size: 10px; }
+    #legend .lg-body { padding: 2px 10px 8px; border-top: 1px solid var(--line-soft); }
+    #legend.collapsed .lg-body { display: none; }
+    #legend .lrow { display: flex; align-items: center; gap: 7px; margin: 4px 0; color: #bcccdd; }
+    #legend .lrow .ln { width: 20px; height: 0; flex: none; }
+    #legend .l-track { border-top: 3px solid #35c26b; } #legend .l-gap { border-top: 3px dashed #ff6b6b; }
+    #legend .l-sat { border-top: 3px dashed #38d9d9; }
+    #legend .dotm { width: 11px; height: 11px; border-radius: 50%; flex: none; border: 1px solid #0008; }
+    #legend .l-ac { background: #ffd166; } #legend .l-anom { background: #ff3b3b; }
+    #legend .l-op { width: 13px; height: 9px; border-radius: 0; background: #7a4a12; border: 1px solid #ffa94d; }
+    #legend .types { border-top: 1px solid var(--line-soft); margin-top: 6px; padding-top: 6px;
+      display: flex; flex-wrap: wrap; gap: 4px 8px; }
+    #legend .tchip { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; color: #b9c8d8; }
+    #legend .tchip i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+    #legend .togrow { border-top: 1px solid var(--line-soft); margin-top: 6px; padding-top: 6px; }
+    #legend label.tog { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); cursor: pointer; }
+    #legend label.tog input { accent-color: var(--cyan); }
+    /* 우하단 좌표/줌 힌트 & 지도 번호 */
+    #map-num { top: 10px; right: 10px; padding: 4px 9px; font-size: 11px; z-index: 600; }
+    #map-num b { color: #9fd0ff; }
+    /* 근거 흐름 안내(활성 시) */
+    #flowbar { bottom: 10px; left: 50%; transform: translateX(-50%); padding: 5px 12px; font-size: 11.5px;
+      z-index: 600; display: none; align-items: center; gap: 8px; }
+    #flowbar.show { display: flex; }
+    #flowbar .fdot { width: 8px; height: 8px; border-radius: 50%; background: #d9a441;
+      animation: livedot 1.2s ease-in-out infinite; }
+    #flowbar b { color: #f0c874; } #flowbar .fx { cursor: pointer; color: var(--muted); margin-left: 4px; }
+    #flowbar .fx:hover { color: #fff; }
+
+    /* SVG 근거 흐름선/펄스 (Leaflet path에 className) */
+    .ev-flow { stroke: #e0ad4b; stroke-width: 2.2; stroke-dasharray: 7 6;
+      animation: flowdash 1.3s linear infinite; }
+    @keyframes flowdash { to { stroke-dashoffset: -26; } }
+    .ev-ring { stroke: #ffd166; fill: #ffd166; animation: evring 1.5s ease-out infinite; }
+    @keyframes evring { 0%{stroke-width:2; fill-opacity:0.28; stroke-opacity:0.95}
+      70%{stroke-width:9; fill-opacity:0; stroke-opacity:0} 100%{stroke-opacity:0} }
+    .cite-ring { stroke: #7ce0a8; fill: #7ce0a8; animation: citering 1.6s ease-out infinite; }
+    @keyframes citering { 0%{stroke-width:2; fill-opacity:0.3; stroke-opacity:0.95}
+      70%{stroke-width:10; fill-opacity:0; stroke-opacity:0} 100%{stroke-opacity:0} }
+
+    /* ── 우: 소스 · 기상 · 뉴스 (스택 섹션) ── */
+    #right-rail .sec { border-bottom: 1px solid var(--line); }
+    #right-rail .sec-hd { padding: 9px 13px; cursor: pointer; display: flex; align-items: center;
+      font-size: 12.5px; font-weight: 700; }
+    #right-rail .sec-hd .chev { margin-left: auto; color: var(--muted); font-size: 11px; }
+    #right-rail .sec-hd .cnt { color: var(--muted); font-weight: 500; font-size: 11px; margin-left: 8px; }
+    #right-rail .sec.collapsed .sec-body { display: none; }
+    #right-rail .sec-body { padding: 4px 13px 12px; }
+    #sec-src .sec-hd { color: var(--blue); }
+    #src-rows .row { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; margin: 5px 0; }
+    #src-rows .row .k { color: var(--muted); }
+    #src-rows .st { color: var(--muted-2); font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px;
+      margin: 9px 0 3px; }
+    #stamp { color: var(--muted-2); font-size: 10.5px; margin-top: 9px; border-top: 1px solid var(--line-soft);
+      padding-top: 7px; }
+    #sec-wx .sec-hd { color: #6fd0ff; }
+    #weather-body .row { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; margin: 3px 0; }
+    #weather-body .row .k { color: var(--muted); }
+    #weather-body .cat { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 10px; font-weight: 600; }
+    .cat-VFR { background: #163a2a; color: #7ce0a8; } .cat-MVFR { background: #183a52; color: #7ac4ff; }
+    .cat-IFR { background: #4a3a12; color: #ffce7a; } .cat-LIFR { background: #5a1414; color: #ff9a9a; }
+    #weather-body .raw { margin-top: 6px; color: var(--muted-2); font-size: 10.5px; word-break: break-all; }
+    #weather-body .empty, #news-list .empty { color: var(--muted-2); font-size: 12px; padding: 4px 0; }
+    #sec-news .sec-hd { color: var(--purple); }
+    .news-item { border: 1px solid var(--line); border-left: 4px solid #8a6fff; border-radius: 6px;
+      padding: 7px 9px; margin: 6px 0; }
+    .news-item .n-title a { color: #dfe6f0; text-decoration: none; font-size: 12px; line-height: 1.4; }
+    .news-item .n-title a:hover { text-decoration: underline; }
+    .news-item .n-meta { display: flex; justify-content: space-between; gap: 8px; margin-top: 5px;
+      color: var(--muted); font-size: 10.5px; align-items: center; }
+
+    /* ══ 코파일럿 도크 (하단) ══ */
+    #copilot { border-top: 1px solid var(--line); background: linear-gradient(180deg,#0b1826,#0a131f);
+      display: flex; flex-direction: column; z-index: 800; }
+    #copilot .cop-hd { display: flex; align-items: center; gap: 10px; padding: 7px 14px;
+      border-bottom: 1px solid var(--line-soft); }
+    #copilot .cop-hd h1 { font-size: 13px; margin: 0; color: var(--green); display: flex; align-items: center; }
+    #copilot .cop-hd .sub { font-size: 10.5px; color: var(--muted); }
+    #copilot .cop-hd .spacer { flex: 1; }
+    #copilot .cop-hd button { background: #17293c; color: #9fc4e8; border: 1px solid var(--line);
+      border-radius: 6px; padding: 4px 10px; font-size: 11px; cursor: pointer; }
+    #copilot .cop-hd button:hover { background: #22405c; color: #dff0ff; }
+    #copilot .cop-hd button:disabled { opacity: 0.4; cursor: default; }
+    #answer { overflow-y: auto; padding: 8px 14px; max-height: 42vh; min-height: 0; }
+    #copilot.min #answer, #copilot.min .quick { display: none; }
+    #answer .empty { color: var(--muted-2); font-size: 12px; padding: 12px 2px; line-height: 1.6; }
+    #answer .empty b { color: #bcd3ea; }
+    /* 로딩 */
+    .loading { display: flex; align-items: center; gap: 10px; color: #9fc4e8; font-size: 12.5px; padding: 14px 2px; }
+    .spinner { width: 15px; height: 15px; border: 2px solid #2a445f; border-top-color: var(--green);
+      border-radius: 50%; animation: spin 0.8s linear infinite; flex: none; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* 투명성 스트립 */
+    .xparency { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin: 2px 0 10px;
+      font-size: 10.5px; }
+    .xchip { background: #0f1f30; border: 1px solid #223a52; color: #9fb8d0; border-radius: 6px; padding: 2px 7px; }
+    .xchip b { color: #bcd3ea; } .xchip.intent { background: #12283f; border-color: #2f5478; color: #a9d4ff; }
+
+    /* 답변 공통 */
+    .ans-head { display: flex; align-items: center; gap: 8px; margin: 2px 0 8px; flex-wrap: wrap; }
+    .intent-pill { font-size: 11px; font-weight: 800; letter-spacing: 0.3px; padding: 3px 10px;
+      border-radius: 12px; background: #123a2a; color: #7ce0a8; }
+    .ans-head .conf { font-size: 11px; color: var(--muted); }
+    .cite-chip { cursor: pointer; background: #16283c; border: 1px solid #2a445f; color: #9fc4e8;
+      border-radius: 9px; padding: 2px 8px; font-size: 10.5px; display: inline-flex; align-items: center; gap: 4px; }
     .cite-chip:hover { background: #23486a; color: #dff0ff; }
+    .cite-chip::before { content: "◎"; font-size: 9px; opacity: 0.7; }
     .cite-chip.t-Anomaly { border-color: #7a2a2a; color: #ffb3b3; }
     .cite-chip.t-OrbitPass { border-color: #1c5a5a; color: #8fe4e4; }
     .cite-chip.t-WeatherState { border-color: #23506e; color: #8fc9ff; }
     .cite-chip.t-NewsEvent { border-color: #4a3a6a; color: #cdb6ff; }
-    #chat .ask { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid #24384f; }
-    #chat .ask input { flex: 1; background: #0e1a28; border: 1px solid #24384f;
-      color: #dbe7f3; border-radius: 6px; padding: 8px 10px; font-size: 13px; outline: none; }
-    #chat .ask input:focus { border-color: #4a7bb0; }
-    #chat .ask button { background: #2e8b57; color: #fff; border: none; border-radius: 6px;
-      padding: 0 14px; font-size: 13px; font-weight: 600; cursor: pointer; }
-    #chat .ask button:hover { background: #37a366; }
-    #chat .quick { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 12px 10px; }
-    #chat .quick button { background: #17293c; color: #9fc4e8; border: 1px solid #24384f;
-      border-radius: 12px; padding: 3px 9px; font-size: 10.5px; cursor: pointer; }
-    #chat .quick button:hover { background: #22405c; color: #dff0ff; }
-    #chat .sg-open { background: #2b3f5c; color: #cfe0f0; border: none; border-radius: 6px;
-      padding: 4px 10px; font-size: 11px; cursor: pointer; }
-    #chat .sg-open:hover { background: #37527a; }
-    #chat .sg-open:disabled { opacity: 0.4; cursor: default; }
+    .cite-chip.plain::before { content: ""; }
 
-    /* 서브그래프 모달 (자체 SVG — 외부 그래프 라이브러리 없음, DR-0006) */
-    #sg-modal { position: absolute; inset: 0; z-index: 2000; background: rgba(4, 10, 18, 0.88);
+    /* 문장 카드 */
+    .a-sent { border-left: 3px solid #35506e; padding: 6px 0 6px 10px; margin: 7px 0;
+      border-radius: 0 5px 5px 0; transition: background 0.12s; }
+    .a-sent:hover { background: rgba(40,64,96,0.16); }
+    .a-sent .a-text { color: #e5edf6; font-size: 12.8px; line-height: 1.55; }
+    .a-sent .a-foot { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+    .kind-badge { display: inline-block; padding: 1px 7px; border-radius: 9px; font-size: 9.5px;
+      font-weight: 700; letter-spacing: 0.3px; }
+    .conf-badge { background: #0f2418; border: 1px solid #1c3a2a; color: #7ce0a8; border-radius: 9px;
+      padding: 1px 7px; font-size: 10px; }
+    .sent-map { margin-left: auto; background: #16283c; border: 1px solid #2a445f; color: #9fc4e8;
+      border-radius: 8px; padding: 1px 8px; font-size: 10px; cursor: pointer; }
+    .sent-map:hover { background: #23486a; color: #dff0ff; }
+
+    /* count 히어로 */
+    .count-hero { display: flex; align-items: center; gap: 18px; padding: 12px 4px 6px; }
+    .count-hero .big { font-size: 54px; font-weight: 800; line-height: 1; color: #eaf3ff; letter-spacing: -1px; }
+    .count-hero .big .unit { font-size: 20px; color: var(--muted); font-weight: 600; margin-left: 4px; }
+    .count-hero .cmeta .lab { font-size: 14px; color: var(--green); font-weight: 700; }
+    .count-hero .cmeta .cap { font-size: 12px; color: #cbd8e6; margin-top: 4px; line-height: 1.5; }
+    .count-hero .cmeta .cites { margin-top: 7px; display: flex; flex-wrap: wrap; gap: 5px; }
+
+    /* filter 리스트 */
+    .flight-card { display: flex; align-items: center; gap: 10px; border: 1px solid var(--line);
+      border-radius: 7px; padding: 8px 11px; margin: 6px 0; cursor: pointer; transition: background 0.12s; }
+    .flight-card:hover { background: rgba(40,64,96,0.2); border-color: #35608c; }
+    .flight-card .fi { font-size: 18px; flex: none; }
+    .flight-card .ft { flex: 1; min-width: 0; }
+    .flight-card .ft .fc { color: #eaf3ff; font-weight: 700; font-size: 13px; }
+    .flight-card .ft .fd { color: #b7c7d8; font-size: 11.5px; margin-top: 2px; }
+    .flight-card .fgo { color: var(--muted); font-size: 15px; }
+
+    /* why / entity 근거 카드 */
+    .why-lead { background: rgba(90,20,20,0.28); border: 1px solid #5a2a2a; border-left: 4px solid #ff5a5a;
+      border-radius: 7px; padding: 11px 13px; margin: 4px 0 10px; }
+    .why-lead .wl-t { color: #ffd7d7; font-size: 13.5px; line-height: 1.55; font-weight: 600; }
+    .why-lead .wl-c { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 5px; }
+    .rationale { border: 1px solid var(--line); border-left: 3px solid var(--amber); border-radius: 6px;
+      padding: 9px 11px; margin: 6px 0; background: rgba(30,26,12,0.35); }
+    .rationale .rt { color: #ecdcc0; font-size: 12.5px; line-height: 1.55; }
+    .rationale .rc { margin-top: 7px; display: flex; flex-wrap: wrap; gap: 5px; }
+
+    /* correlation 클러스터 유도 */
+    .corr-cta { display: flex; align-items: center; gap: 12px; background: rgba(18,46,46,0.4);
+      border: 1px solid #1c4a4a; border-radius: 8px; padding: 11px 13px; margin: 4px 0 10px; }
+    .corr-cta .ci { font-size: 22px; } .corr-cta .cbody { flex: 1; }
+    .corr-cta .ch { color: #8fe4e4; font-weight: 700; font-size: 13px; }
+    .corr-cta .cs { color: #b7ccd8; font-size: 11.5px; margin-top: 3px; line-height: 1.5; }
+    .corr-cta button { background: #1c5a5a; color: #d6fbfb; border: none; border-radius: 7px;
+      padding: 8px 14px; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+    .corr-cta button:hover { background: #237070; }
+    .cluster { border: 1px solid var(--line); border-radius: 7px; margin: 6px 0; overflow: hidden; }
+    .cluster > summary { list-style: none; cursor: pointer; padding: 8px 11px; font-size: 12.5px;
+      color: #dfe6f0; display: flex; align-items: center; gap: 8px; }
+    .cluster > summary::-webkit-details-marker { display: none; }
+    .cluster > summary .cx { margin-left: auto; color: var(--muted); font-size: 11px; }
+    .cluster[open] > summary { border-bottom: 1px solid var(--line-soft); background: rgba(18,46,46,0.25); }
+    .cluster .cbdy { padding: 4px 11px 8px; }
+
+    /* 그룹 섹션(상황요약) */
+    .grp { border: 1px solid var(--line); border-radius: 7px; margin: 7px 0; overflow: hidden; }
+    .grp > summary { list-style: none; cursor: pointer; padding: 9px 12px; font-size: 12.5px; font-weight: 700;
+      display: flex; align-items: center; gap: 8px; }
+    .grp > summary::-webkit-details-marker { display: none; }
+    .grp > summary .gc { margin-left: auto; font-weight: 500; color: var(--muted); font-size: 11px; }
+    .grp > summary .chev { color: var(--muted); font-size: 11px; }
+    .grp[open] > summary { border-bottom: 1px solid var(--line-soft); }
+    .grp .gbody { padding: 2px 12px 8px; }
+    .headline { background: rgba(18,58,42,0.22); border: 1px solid #1c4a34; border-left: 4px solid var(--green);
+      border-radius: 7px; padding: 11px 13px; margin: 2px 0 8px; }
+    .headline .ht { color: #dbf4e6; font-size: 14px; line-height: 1.5; font-weight: 600; }
+    .headline .hc { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+
+    /* 코파일럿 입력부 */
+    .quick { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 14px 8px; align-items: center; }
+    .quick .ql { font-size: 10.5px; color: var(--muted-2); margin-right: 2px; }
+    .quick button { background: #17293c; color: #9fc4e8; border: 1px solid var(--line); border-radius: 12px;
+      padding: 4px 10px; font-size: 10.5px; cursor: pointer; }
+    .quick button:hover { background: #22405c; color: #dff0ff; }
+    .ask { display: flex; gap: 8px; padding: 8px 14px 10px; border-top: 1px solid var(--line-soft); }
+    .ask input { flex: 1; background: var(--panel-2); border: 1px solid #2a445f; color: var(--txt);
+      border-radius: 8px; padding: 10px 12px; font-size: 13.5px; outline: none; }
+    .ask input:focus { border-color: #4a7bb0; box-shadow: 0 0 0 2px rgba(74,123,176,0.18); }
+    .ask button { background: #2e8b57; color: #fff; border: none; border-radius: 8px; padding: 0 18px;
+      font-size: 13px; font-weight: 700; cursor: pointer; }
+    .ask button:hover { background: #37a366; }
+
+    /* ══ 온보딩 오버레이 ══ */
+    #onboard { position: fixed; inset: 0; z-index: 3000; background: rgba(4,9,15,0.82);
+      display: none; align-items: center; justify-content: center; backdrop-filter: blur(3px); }
+    #onboard.open { display: flex; }
+    #ob-box { width: min(760px, 94vw); max-height: 90vh; overflow-y: auto; background: #0c1826;
+      border: 1px solid #294057; border-radius: 12px; box-shadow: 0 12px 50px rgba(0,0,0,0.6); }
+    #ob-box .ob-hd { padding: 18px 22px 12px; border-bottom: 1px solid var(--line); }
+    #ob-box .ob-hd .t { font-size: 19px; font-weight: 800; color: #eaf3ff; }
+    #ob-box .ob-hd .t b { color: var(--cyan); }
+    #ob-box .ob-hd .s { color: #b7ccdf; font-size: 13px; margin-top: 7px; line-height: 1.55; }
+    #ob-box .ob-body { padding: 14px 22px 6px; }
+    #ob-box .ob-sect-t { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px;
+      color: var(--blue); margin: 10px 0 8px; }
+    .ob-zone { display: flex; gap: 11px; margin: 9px 0; }
+    .ob-zone .zn { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px;
+      border-radius: 50%; background: #1d3350; color: #9fd0ff; font-weight: 800; font-size: 12px; flex: none; }
+    .ob-zone .zt b { color: #eaf3ff; } .ob-zone .zt { font-size: 12.8px; color: #c3d3e3; line-height: 1.5; }
+    .ob-flow { display: flex; gap: 11px; margin: 8px 0; }
+    .ob-flow .fn { color: var(--green); font-weight: 800; font-size: 13px; flex: none; width: 20px; }
+    .ob-flow .ft { font-size: 12.8px; color: #c3d3e3; line-height: 1.5; }
+    .ob-flow .ft b { color: #eaf3ff; }
+    .ob-honest { margin: 12px 0 4px; padding: 10px 12px; background: rgba(18,40,63,0.5);
+      border: 1px solid #244a6e; border-radius: 8px; font-size: 12px; color: #a9c6e0; line-height: 1.55; }
+    .ob-honest b { color: #cfe0f0; }
+    #ob-box .ob-ft { padding: 12px 22px 18px; display: flex; align-items: center; gap: 14px;
+      border-top: 1px solid var(--line); margin-top: 8px; }
+    #ob-box .ob-ft label { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; cursor: pointer; }
+    #ob-box .ob-ft .spacer { flex: 1; }
+    #ob-box .ob-ft button { background: #2e8b57; color: #fff; border: none; border-radius: 8px;
+      padding: 9px 22px; font-size: 13px; font-weight: 700; cursor: pointer; }
+    #ob-box .ob-ft button:hover { background: #37a366; }
+
+    /* ══ 서브그래프 모달 ══ */
+    #sg-modal { position: fixed; inset: 0; z-index: 2000; background: rgba(4, 10, 18, 0.88);
       display: none; align-items: center; justify-content: center; }
     #sg-modal.open { display: flex; }
-    #sg-box { width: min(1020px, 94vw); height: min(700px, 90vh); background: #0b1622;
+    #sg-box { width: min(1020px, 94vw); height: min(700px, 90vh); background: var(--panel);
       border: 1px solid #294057; border-radius: 10px; display: flex; flex-direction: column;
       box-shadow: 0 8px 40px rgba(0,0,0,0.6); }
-    #sg-box .hdr { padding: 10px 14px; border-bottom: 1px solid #24384f;
+    #sg-box .hdr { padding: 10px 14px; border-bottom: 1px solid var(--line);
       display: flex; justify-content: space-between; align-items: center; }
-    #sg-box .hdr h1 { font-size: 14px; margin: 0; color: #6fb4ff; }
-    #sg-box .hdr .x { cursor: pointer; color: #93a7bd; font-size: 18px; padding: 0 6px; }
+    #sg-box .hdr h1 { font-size: 14px; margin: 0; color: var(--blue); }
+    #sg-box .hdr .x { cursor: pointer; color: var(--muted); font-size: 18px; padding: 0 6px; }
     #sg-box .hdr .x:hover { color: #fff; }
     #sg-wrap { flex: 1; display: flex; min-height: 0; }
-    #sg-svg { flex: 1; height: 100%; background:
-      radial-gradient(circle at 50% 45%, #0e1c2c 0%, #0a131e 70%); }
-    #sg-detail { width: 240px; border-left: 1px solid #24384f; padding: 12px;
-      font-size: 12px; color: #cfe0f0; overflow-y: auto; }
-    #sg-detail .k { color: #93a7bd; }
-    #sg-detail a { color: #6fb4ff; word-break: break-all; }
-    #sg-legend { padding: 6px 14px 10px; border-top: 1px solid #24384f; display: flex;
-      flex-wrap: wrap; gap: 10px; font-size: 10.5px; color: #93a7bd; }
+    #sg-svg { flex: 1; height: 100%; background: radial-gradient(circle at 50% 45%, #0e1c2c 0%, #0a131e 70%); }
+    #sg-detail { width: 240px; border-left: 1px solid var(--line); padding: 12px; font-size: 12px;
+      color: #cfe0f0; overflow-y: auto; }
+    #sg-detail .k { color: var(--muted); } #sg-detail a { color: var(--blue); word-break: break-all; }
+    #sg-legend { padding: 6px 14px 10px; border-top: 1px solid var(--line); display: flex; flex-wrap: wrap;
+      gap: 10px; font-size: 10.5px; color: var(--muted); }
     #sg-legend span { display: inline-flex; align-items: center; gap: 4px; }
     #sg-legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
     .sg-edge { stroke: #33506f; stroke-width: 1.2; fill: none; }
@@ -203,83 +394,162 @@
     .sg-node circle { cursor: pointer; stroke: #0b1622; stroke-width: 1.5; }
     .sg-node.sel circle { stroke: #fff; stroke-width: 2.5; }
     .sg-nlabel { fill: #cfe0f0; font-size: 9.5px; pointer-events: none; }
+
+    /* 좁은 화면 대응 (발표 외 축소 시) */
+    @media (max-width: 1180px) {
+      :root { --rail-l: 290px; --rail-r: 270px; }
+    }
   </style>
 </head>
 <body>
-  <div id="map"></div>
+  <div id="app">
+    <!-- ══ 헤더바 ══ -->
+    <header id="topbar">
+      <div class="brand">
+        <span class="logo">SK<b>AI</b> · 공중 ISR 융합 코파일럿</span>
+        <span class="tag">이 지역, 지금 하늘에서 뭐가 이상한가? — 항적·위성·기상·뉴스를 온톨로지로 융합</span>
+      </div>
+      <div class="spacer"></div>
+      <div id="live" title="데이터 신선도 상태">
+        <span class="dot"></span><span class="lab">…</span><span class="ago"></span>
+      </div>
+      <span class="region-chip">관심지역 <b id="region">—</b></span>
+      <button class="tbtn" id="tg-left" onclick="toggleRail('left')" title="이상징후 패널 접기/펼치기"><span class="ic">◧</span></button>
+      <button class="tbtn" id="tg-right" onclick="toggleRail('right')" title="소스 패널 접기/펼치기"><span class="ic">◨</span></button>
+      <button class="tbtn" id="tg-cop" onclick="toggleCopilot()" title="코파일럿 접기/펼치기"><span class="ic">▾</span> 코파일럿</button>
+      <button class="tbtn" onclick="openOnboard()" title="사용 안내">? 안내</button>
+    </header>
 
-  <!-- 우상단: 통계 -->
-  <div id="panel" class="card">
-    <h1>SKAI · Air ISR (P4)</h1>
-    <div class="row"><span class="k">관심지역</span><span id="region">—</span></div>
-    <div class="row"><span class="k">항적(현재)</span><span id="n-obs">0</span></div>
-    <div class="row"><span class="k">트랙</span><span id="n-track">0</span></div>
-    <div class="row"><span class="k">gap 트랙</span><span id="n-gap">0</span></div>
-    <div class="row"><span class="k">이상징후</span><span id="n-anom">0</span></div>
-    <div class="legend">
-      <div><span class="l-ac"></span>항공기(콜사인 툴팁)</div>
-      <div><span class="l-track"></span>트랙 경로</div>
-      <div><span class="l-gap"></span>ADS-B gap 트랙</div>
-      <div><span class="l-sat"></span>위성 지상궤적(통과창)</div>
-      <div><span class="l-oparea"></span>작전구역(OpArea)</div>
+    <!-- ══ 본문: 좌 레일 · 지도 · 우 레일 ══ -->
+    <div id="body">
+      <!-- 좌: 이상징후 타임라인 -->
+      <aside class="rail" id="left-rail">
+        <div class="panel-hd">
+          <h1><span class="zone-num">2</span>⚠ 이상징후 타임라인</h1>
+          <div class="sub">탐지된 이상 신호. <b>클릭</b> → 지도에서 위치·근거(연결선)·승인/기각</div>
+        </div>
+        <div id="tl-list"><div class="empty">탐지된 이상징후 없음</div></div>
+        <div id="detail"></div>
+      </aside>
+
+      <!-- 지도 -->
+      <main id="map-wrap">
+        <div id="map"></div>
+        <div class="map-badge" id="map-num"><span class="zone-num">1</span><b>지도</b> · 항적·위성궤적·이상징후 위치</div>
+        <div class="map-badge" id="legend">
+          <div class="lg-hd" onclick="document.getElementById('legend').classList.toggle('collapsed')">
+            🗺 범례 <span class="chev" id="lg-chev">▾</span>
+          </div>
+          <div class="lg-body">
+            <div class="lrow"><span class="dotm l-ac"></span>항공기(콜사인)</div>
+            <div class="lrow"><span class="ln l-track"></span>트랙 경로</div>
+            <div class="lrow"><span class="ln l-gap"></span>ADS-B gap 트랙</div>
+            <div class="lrow"><span class="ln l-sat"></span>위성 지상궤적</div>
+            <div class="lrow"><span class="dotm l-anom"></span>이상징후</div>
+            <div class="lrow"><span class="l-op dotm"></span>작전구역(OpArea)</div>
+            <div class="types" id="type-legend"></div>
+            <div class="togrow">
+              <label class="tog"><input type="checkbox" id="tog-sat" checked /> 위성 궤적 표시</label>
+            </div>
+          </div>
+        </div>
+        <div class="map-badge" id="flowbar">
+          <span class="fdot"></span><span><b id="flow-txt">근거 흐름</b></span>
+          <span class="fx" onclick="clearFlow()" title="근거 표시 지우기">✕</span>
+        </div>
+      </main>
+
+      <!-- 우: 소스 · 기상 · 뉴스 -->
+      <aside class="rail" id="right-rail">
+        <div class="sec" id="sec-src">
+          <div class="sec-hd" onclick="toggleSec('sec-src')">
+            <span class="zone-num">3</span>🛰 소스 (온톨로지 융합) <span class="chev">▾</span>
+          </div>
+          <div class="sec-body">
+            <div id="src-rows">
+              <div class="row"><span class="k">항적(현재)</span><span id="n-obs">0</span></div>
+              <div class="row"><span class="k">트랙</span><span id="n-track">0</span></div>
+              <div class="row"><span class="k">ADS-B gap 트랙</span><span id="n-gap">0</span></div>
+              <div class="row"><span class="k">이상징후</span><span id="n-anom">0</span></div>
+              <div class="st">소스별 객체</div>
+              <div class="row"><span class="k">OpenSky 항적</span><span id="c-opensky">0</span></div>
+              <div class="row"><span class="k">Celestrak 통과</span><span id="c-celestrak">0</span></div>
+              <div class="row"><span class="k">METAR 기상</span><span id="c-metar">0</span></div>
+              <div class="row"><span class="k">GDELT 뉴스</span><span id="c-gdelt">0</span></div>
+            </div>
+            <div id="stamp">갱신 대기…</div>
+          </div>
+        </div>
+        <div class="sec" id="sec-wx">
+          <div class="sec-hd" onclick="toggleSec('sec-wx')">🌦 기상 (METAR) <span class="chev">▾</span></div>
+          <div class="sec-body"><div id="weather-body"><div class="empty">기상 수신 대기…</div></div></div>
+        </div>
+        <div class="sec" id="sec-news">
+          <div class="sec-hd" onclick="toggleSec('sec-news')">
+            📰 뉴스 / OSINT <span class="cnt">저신뢰 ≤0.4</span><span class="chev">▾</span>
+          </div>
+          <div class="sec-body"><div id="news-list"><div class="empty">뉴스 수신 대기…</div></div></div>
+        </div>
+      </aside>
     </div>
-    <div id="type-legend"></div>
-    <label class="toggle">
-      <input type="checkbox" id="tog-sat" checked /> 위성 궤적 표시
-    </label>
-    <!-- 소스별 객체 카운트 (P3 산출 요구) -->
-    <div class="src">
-      <div class="st">소스별 객체 (온톨로지)</div>
-      <div class="row"><span class="k">OpenSky 항적</span><span id="c-opensky">0</span></div>
-      <div class="row"><span class="k">Celestrak 통과</span><span id="c-celestrak">0</span></div>
-      <div class="row"><span class="k">METAR 기상</span><span id="c-metar">0</span></div>
-      <div class="row"><span class="k">GDELT 뉴스</span><span id="c-gdelt">0</span></div>
-    </div>
-    <div class="stamp" id="stamp">갱신 대기…</div>
+
+    <!-- ══ 코파일럿 도크 ══ -->
+    <section id="copilot">
+      <div class="cop-hd">
+        <h1><span class="zone-num">4</span>🎙 코파일럿 · 상황평가</h1>
+        <span class="sub">문장마다 근거(cites) 강제 · 근거 없는 주장은 출력 안 함</span>
+        <span class="spacer"></span>
+        <button id="sg-open" disabled onclick="openSubgraph()">🕸 서브그래프</button>
+      </div>
+      <div id="answer">
+        <div class="empty"><b>자연어로 물어보세요.</b> 문장마다 클릭 가능한 근거가 붙습니다.
+          아래 예시를 누르거나 직접 질문하세요.</div>
+      </div>
+      <div class="quick" id="quick"></div>
+      <div class="ask">
+        <input id="chat-input" type="text" autocomplete="off"
+          placeholder="예: 지금 KADIZ 근방 이상한 거 있어? / 군용기 몇 대야? / 은닉 정황 있어?" />
+        <button onclick="submitChat()">질의</button>
+      </div>
+    </section>
   </div>
 
-  <!-- 우하단: 기상 카드 (METAR) -->
-  <div id="weather" class="card">
-    <h1>🌦 기상 (METAR)</h1>
-    <div id="weather-body"><div class="empty">기상 수신 대기…</div></div>
-  </div>
+  <!-- ══ 온보딩 오버레이 ══ -->
+  <div id="onboard">
+    <div id="ob-box">
+      <div class="ob-hd">
+        <div class="t">SK<b>AI</b> — 공중 ISR 융합 코파일럿</div>
+        <div class="s">여러 공개 소스(항적·위성궤도·기상·뉴스/OSINT)를 <b>온톨로지</b>로 융합해,
+          "이 지역, 지금 하늘에서 뭐가 이상한가?"에 <b>출처가 달린</b> 답을 줍니다.
+          아래 번호는 화면의 각 구역과 같습니다.</div>
+      </div>
+      <div class="ob-body">
+        <div class="ob-sect-t">화면 구성</div>
+        <div class="ob-zone"><span class="zn">1</span><span class="zt"><b>지도(중앙)</b> — 항공기·위성 지상궤적·이상징후 위치. 마커에 마우스를 올리면 상세.</span></div>
+        <div class="ob-zone"><span class="zn">2</span><span class="zt"><b>이상징후 타임라인(좌)</b> — 탐지된 이상 신호. 클릭하면 지도가 이동하고 <b>근거 관측이 연결선으로 표시</b>되며 승인/기각할 수 있습니다.</span></div>
+        <div class="ob-zone"><span class="zn">3</span><span class="zt"><b>소스·기상·뉴스(우)</b> — 융합된 원천 데이터와 개수. 접기/펼치기 가능.</span></div>
+        <div class="ob-zone"><span class="zn">4</span><span class="zt"><b>코파일럿(하)</b> — 자연어로 물으면 <b>문장마다 근거(cites) 배지</b>를 달아 답합니다. 근거 없는 문장은 시스템이 거부합니다.</span></div>
 
-  <!-- 좌하단: 뉴스 패널 (GDELT · 저신뢰 OSINT) -->
-  <div id="news" class="card">
-    <div class="hdr">
-      <h1>📰 뉴스 / OSINT (저신뢰)</h1>
-      <div class="sub">확증 아님 · 하드 소스로 교차검증 · 신뢰도 ≤ 0.4</div>
-    </div>
-    <div id="news-list"><div class="empty">뉴스 수신 대기…</div></div>
-  </div>
+        <div class="ob-sect-t">핵심 동선 3가지</div>
+        <div class="ob-flow"><span class="fn">①</span><span class="ft"><b>질문 → 근거 답변:</b> 아래 입력창에 질문 → 답 문장의 <b>근거 배지 클릭</b> → 지도에서 그 객체가 강조됩니다.</span></div>
+        <div class="ob-flow"><span class="fn">②</span><span class="ft"><b>이상징후 결정 루프:</b> 좌측 타임라인 클릭 → 근거 확인 → <b>승인(confirm)/기각(dismiss)</b>. Q&A가 아니라 결정으로 이어집니다.</span></div>
+        <div class="ob-flow"><span class="fn">③</span><span class="ft"><b>은닉 정황:</b> "은닉 정황 있어?" 질의 → <b>서브그래프</b>로 교차소스(위성·뉴스·다른 이상징후) 연관을 그래프로 확인.</span></div>
 
-  <!-- 좌상단: 이상징후 타임라인 + 선택 상세 -->
-  <div id="timeline" class="card">
-    <div class="hdr">
-      <h1>⚠ 이상징후 타임라인</h1>
-      <div class="sub">항목 클릭 → 지도 하이라이트 · 근거 · 승인/기각</div>
-    </div>
-    <div id="tl-list"><div class="empty">탐지된 이상징후 없음</div></div>
-    <div id="detail"></div>
-  </div>
-
-  <!-- 하단 중앙: 코파일럿 채팅 (P4) -->
-  <div id="chat" class="card">
-    <div class="hdr">
-      <div><h1>🛰 코파일럿 · 상황평가</h1>
-        <div class="sub">자연어 질의 → 문장별 근거(cites) 강제 · 근거 없는 주장 출력 안 함</div></div>
-      <button class="sg-open" id="sg-open" disabled onclick="openSubgraph()">🕸 서브그래프</button>
-    </div>
-    <div id="chat-body"><div class="empty">질의를 입력하거나 아래 예시를 눌러보세요.</div></div>
-    <div class="quick" id="chat-quick"></div>
-    <div class="ask">
-      <input id="chat-input" type="text" placeholder="예: 지금 KADIZ 근방 이상한 거 있어?"
-        autocomplete="off" />
-      <button onclick="submitChat()">질의</button>
+        <div class="ob-honest">
+          <b>정직 안내:</b> 이상탐지는 규칙 기반, 서술은 템플릿(옵션 LLM 다듬기)입니다.
+          강점은 <b>근거 강제(citation)</b> — 문장은 온톨로지 사실에서 조립되고, 근거 없는 문장은 거부됩니다.
+          평가 정밀도 수치는 자작 합성 시나리오 기준입니다(라이브 실측 아님).
+        </div>
+      </div>
+      <div class="ob-ft">
+        <label><input type="checkbox" id="ob-dismiss" /> 다시 보지 않기</label>
+        <span class="spacer"></span>
+        <button onclick="closeOnboard()">시작하기</button>
+      </div>
     </div>
   </div>
 
-  <!-- 서브그래프 모달 (Assessment 중심 온톨로지 서브그래프, 자체 SVG) -->
+  <!-- ══ 서브그래프 모달 ══ -->
   <div id="sg-modal">
     <div id="sg-box">
       <div class="hdr">
@@ -295,26 +565,30 @@
   </div>
 
   <script>
-    // KADIZ 중심 근방 (lat 32~39, lon 122~132)
-    const map = L.map("map", { zoomControl: true }).setView([35.6, 127.0], 6);
+    // ════════════════════════════════════════════════════════════
+    // 지도 초기화 (KADIZ 중심 근방)
+    // ════════════════════════════════════════════════════════════
+    const map = L.map("map", { zoomControl: true, attributionControl: true }).setView([35.6, 127.0], 6);
+    map.zoomControl.setPosition("topright");
     L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-      attribution: "&copy; OpenStreetMap &copy; CARTO",
-      maxZoom: 12,
+      attribution: "&copy; OpenStreetMap &copy; CARTO", maxZoom: 12,
     }).addTo(map);
 
-    // 레이어 그룹 (갱신 시 통째로 교체). satLayer는 anom/ac보다 먼저 add → 아래 깔림.
+    // 레이어 그룹 (갱신 시 통째로 교체). 순서 = z-index 아래→위.
     let regionLayer = L.layerGroup().addTo(map);
     let trackLayer = L.layerGroup().addTo(map);
     let satLayer = L.layerGroup().addTo(map);
     let acLayer = L.layerGroup().addTo(map);
+    let evidenceLayer = L.layerGroup().addTo(map);   // 근거 흐름선/펄스
     let anomLayer = L.layerGroup().addTo(map);
+    let citeLayer = L.layerGroup().addTo(map);        // cite 클릭 하이라이트
 
-    let lastPasses = [];                // 마지막 OrbitPass (토글 재그리기용)
-    let showSat = true;                 // 위성 궤적 표시 여부
-
-    let selectedId = null;              // 선택된 Anomaly id (갱신 사이 유지)
-    let anomMarkers = {};               // id → Leaflet marker (하이라이트용)
-    let lastAnomalies = [];             // 마지막 anomalies (상세 렌더용)
+    let lastPasses = [];
+    let showSat = true;
+    let selectedId = null;
+    let anomMarkers = {};
+    let lastAnomalies = [];
+    let lastAssessment = null;
 
     async function getJSON(url) {
       const r = await fetch(url, { cache: "no-store" });
@@ -326,39 +600,35 @@
       if (!r.ok) throw new Error(url + " → HTTP " + r.status);
       return r.json();
     }
-    function fmtTime(ts) {
-      return new Date(ts * 1000).toLocaleString("ko-KR", { hour12: false });
+    function fmtTime(ts) { return new Date(ts * 1000).toLocaleString("ko-KR", { hour12: false }); }
+    function fmtClock(ts) {
+      return new Date(ts * 1000).toLocaleTimeString("ko-KR", { hour12: false, hour: "2-digit", minute: "2-digit" });
     }
-    // 이상징후 유형 → 라벨·아이콘·색 (P5: 5종). 마커/타임라인/툴팁에서 유형 구분.
-    const TYPE_LABEL = {
-      emergency_squawk: "비상 스쿽",
-      adsb_dropout: "ADS-B dropout",
-      loitering: "로이터링",
-      military_approach: "군용기 접근",
-      satellite_proximity: "위성 근접",
-    };
-    const TYPE_ICON = {
-      emergency_squawk: "🆘", adsb_dropout: "📡", loitering: "🌀",
-      military_approach: "🪖", satellite_proximity: "🛰",
-    };
-    const TYPE_COLOR = {
-      emergency_squawk: "#ff3b3b", adsb_dropout: "#ff9f43", loitering: "#feca57",
-      military_approach: "#ee5253", satellite_proximity: "#48dbfb",
-    };
-    const STATUS_LABEL = { candidate: "후보", confirmed: "확인됨", dismissed: "기각됨" };
+    function esc(s) { return (s == null ? "" : String(s)).replace(/[&<>"]/g,
+      (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 
+    // 이상징후 유형 메타 (P5 5종)
+    const TYPE_LABEL = { emergency_squawk: "비상 스쿽", adsb_dropout: "ADS-B dropout",
+      loitering: "로이터링", military_approach: "군용기 접근", satellite_proximity: "위성 근접" };
+    const TYPE_ICON = { emergency_squawk: "🆘", adsb_dropout: "📡", loitering: "🌀",
+      military_approach: "🪖", satellite_proximity: "🛰" };
+    const TYPE_COLOR = { emergency_squawk: "#ff3b3b", adsb_dropout: "#ff9f43", loitering: "#feca57",
+      military_approach: "#ee5253", satellite_proximity: "#48dbfb" };
+    const STATUS_LABEL = { candidate: "후보", confirmed: "확인됨", dismissed: "기각됨" };
+    const STATUS_COLOR = { candidate: "#ff3b3b", confirmed: "#c0392b", dismissed: "#6b7a8d" };
+
+    // ════════════════════════════════════════════════════════════
+    // 지도 레이어 렌더 (기존 로직 보존)
+    // ════════════════════════════════════════════════════════════
     function drawRegions(regions) {
       regionLayer.clearLayers();
       let name = "—";
       for (const reg of regions) {
-        // ADIZ(KADIZ)는 파랑 큰 폴리곤, OpArea 소구역은 주황 강조(민감 작전구역).
         const isOp = reg.classification === "OpArea";
-        if (reg.classification === "ADIZ") name = reg.name;  // 헤더엔 ADIZ 이름
+        if (reg.classification === "ADIZ") name = reg.name;
         L.polygon(reg.geo, {
-          color: isOp ? "#ffa94d" : "#6fb4ff",
-          weight: isOp ? 2 : 2,
-          fillColor: isOp ? "#7a4a12" : "#1e4b78",
-          fillOpacity: isOp ? 0.14 : 0.08,
+          color: isOp ? "#ffa94d" : "#6fb4ff", weight: 2,
+          fillColor: isOp ? "#7a4a12" : "#1e4b78", fillOpacity: isOp ? 0.14 : 0.08,
           dashArray: isOp ? "3 4" : "6 6",
         }).bindTooltip(reg.name + " · " + reg.classification).addTo(regionLayer);
       }
@@ -373,14 +643,10 @@
         const gap = t.has_gap;
         if (gap) gapCount++;
         L.polyline(t.path, {
-          color: gap ? "#ff6b6b" : "#35c26b",
-          weight: gap ? 3 : 2,
-          opacity: 0.85,
+          color: gap ? "#ff6b6b" : "#35c26b", weight: gap ? 3 : 2, opacity: 0.85,
           dashArray: gap ? "6 6" : null,
-        }).bindTooltip(
-          (t.callsign || t.icao24) + " · " + t.n_points + "점" +
-          (gap ? " · ⚠ ADS-B gap" : "")
-        ).addTo(trackLayer);
+        }).bindTooltip((t.callsign || t.icao24) + " · " + t.n_points + "점" +
+          (gap ? " · ⚠ ADS-B gap" : "")).addTo(trackLayer);
       }
       document.getElementById("n-track").textContent = tracks.length;
       document.getElementById("n-gap").textContent = gapCount;
@@ -391,47 +657,31 @@
       for (const o of obs) {
         const emerg = ["7500", "7600", "7700"].includes(o.squawk);
         L.circleMarker([o.lat, o.lon], {
-          radius: 5,
-          color: emerg ? "#ff3b3b" : "#7a5c00",
-          weight: 1,
-          fillColor: emerg ? "#ff3b3b" : "#ffd166",
-          fillOpacity: 0.95,
-        }).bindTooltip(
-          "<b>" + (o.callsign || o.icao24) + "</b>" +
-          (o.squawk ? " · sq " + o.squawk : "") +
+          radius: 5, color: emerg ? "#ff3b3b" : "#7a5c00", weight: 1,
+          fillColor: emerg ? "#ff3b3b" : "#ffd166", fillOpacity: 0.95,
+        }).bindTooltip("<b>" + esc(o.callsign || o.icao24) + "</b>" +
+          (o.squawk ? " · sq " + esc(o.squawk) : "") +
           (o.alt != null ? "<br>고도 " + Math.round(o.alt) + " m" : "") +
           (o.velocity != null ? "<br>속도 " + Math.round(o.velocity) + " m/s" : "") +
-          "<br><span style='color:#8aa'>" + o.source + "</span>"
-        ).addTo(acLayer);
+          "<br><span style='color:#8aa'>" + esc(o.source) + "</span>").addTo(acLayer);
       }
       document.getElementById("n-obs").textContent = obs.length;
     }
 
-    function fmtClock(ts) {
-      return new Date(ts * 1000).toLocaleTimeString("ko-KR",
-        { hour12: false, hour: "2-digit", minute: "2-digit" });
-    }
-
-    // 위성 지상궤적(통과창) — 청록 점선. 통과 구간만 그린다(over Region).
     function drawOrbitPasses(passes) {
       satLayer.clearLayers();
-      if (showSat) {
-        for (const p of passes) {
-          const win = fmtClock(p.start_ts) + "~" + fmtClock(p.end_ts);
-          const tip = "<b>🛰 " + p.name + "</b>" +
-            "<br>통과창 " + win +
-            "<br>최대 앙각 " + (p.max_elevation != null ? p.max_elevation.toFixed(1) + "°" : "—") +
-            (p.object_type ? "<br><span style='color:#8aa'>" + p.object_type + "</span>" : "");
-          if (p.ground_track && p.ground_track.length >= 2) {
-            L.polyline(p.ground_track, {
-              color: "#38d9d9", weight: 2, opacity: 0.9, dashArray: "5 5",
-            }).bindTooltip(tip).addTo(satLayer);
-          } else if (p.ground_track && p.ground_track.length === 1) {
-            L.circleMarker(p.ground_track[0], {
-              radius: 4, color: "#38d9d9", weight: 2,
-              fillColor: "#38d9d9", fillOpacity: 0.8,
-            }).bindTooltip(tip).addTo(satLayer);
-          }
+      if (!showSat) return;
+      for (const p of passes) {
+        const win = fmtClock(p.start_ts) + "~" + fmtClock(p.end_ts);
+        const tip = "<b>🛰 " + esc(p.name) + "</b><br>통과창 " + win +
+          "<br>최대 앙각 " + (p.max_elevation != null ? p.max_elevation.toFixed(1) + "°" : "—") +
+          (p.object_type ? "<br><span style='color:#8aa'>" + esc(p.object_type) + "</span>" : "");
+        if (p.ground_track && p.ground_track.length >= 2) {
+          L.polyline(p.ground_track, { color: "#38d9d9", weight: 2, opacity: 0.9, dashArray: "5 5" })
+            .bindTooltip(tip).addTo(satLayer);
+        } else if (p.ground_track && p.ground_track.length === 1) {
+          L.circleMarker(p.ground_track[0], { radius: 4, color: "#38d9d9", weight: 2,
+            fillColor: "#38d9d9", fillOpacity: 0.8 }).bindTooltip(tip).addTo(satLayer);
         }
       }
     }
@@ -439,32 +689,31 @@
     const CAT_LABEL = { VFR: "양호", MVFR: "제한", IFR: "불량", LIFR: "매우불량" };
     function drawWeather(weathers) {
       const body = document.getElementById("weather-body");
-      if (!weathers || !weathers.length) {
-        body.innerHTML = '<div class="empty">기상 데이터 없음</div>';
-        return;
-      }
-      const w = weathers[0];  // 대표 공항(RKSI)
+      if (!weathers || !weathers.length) { body.innerHTML = '<div class="empty">기상 데이터 없음</div>'; return; }
+      const w = weathers[0];
       const cat = w.flight_category || "—";
-      const wind = (w.wind_dir != null ? w.wind_dir + "° " : "가변 ") +
-        (w.wind_speed_kt != null ? w.wind_speed_kt + "kt" : "—");
+      const wind = (w.wind_dir != null ? w.wind_dir + "° " : "가변 ") + (w.wind_speed_kt != null ? w.wind_speed_kt + "kt" : "—");
       const vis = w.visibility_sm != null ? w.visibility_sm + " sm" : "—";
       const ceil = w.ceiling_ft != null ? w.ceiling_ft + " ft" : "무제한";
       body.innerHTML =
-        '<div class="row"><span class="k">공항</span><span>' + w.station + "</span></div>" +
-        '<div class="row"><span class="k">임무기상</span><span class="cat cat-' + cat + '">' +
-        cat + (CAT_LABEL[cat] ? " · " + CAT_LABEL[cat] : "") + "</span></div>" +
-        '<div class="row"><span class="k">바람</span><span>' + wind + "</span></div>" +
-        '<div class="row"><span class="k">시정</span><span>' + vis + "</span></div>" +
-        '<div class="row"><span class="k">실링</span><span>' + ceil + "</span></div>" +
-        '<div class="raw">' + (w.conditions || "") + "</div>";
+        '<div class="row"><span class="k">공항</span><span>' + esc(w.station) + "</span></div>" +
+        '<div class="row"><span class="k">임무기상</span><span class="cat cat-' + esc(cat) + '">' +
+        esc(cat) + (CAT_LABEL[cat] ? " · " + CAT_LABEL[cat] : "") + "</span></div>" +
+        '<div class="row"><span class="k">바람</span><span>' + esc(wind) + "</span></div>" +
+        '<div class="row"><span class="k">시정</span><span>' + esc(vis) + "</span></div>" +
+        '<div class="row"><span class="k">실링</span><span>' + esc(ceil) + "</span></div>" +
+        '<div class="raw">' + esc(w.conditions || "") + "</div>";
     }
 
     function drawNews(newsList) {
       const list = document.getElementById("news-list");
+      const cntEl = document.querySelector("#sec-news .cnt");
       if (!newsList || !newsList.length) {
         list.innerHTML = '<div class="empty">관련 뉴스 없음 — GDELT 5분 폴링</div>';
+        if (cntEl) cntEl.textContent = "저신뢰 ≤0.4";
         return;
       }
+      if (cntEl) cntEl.textContent = newsList.length + "건 · 저신뢰";
       list.innerHTML = "";
       for (const n of newsList) {
         const div = document.createElement("div");
@@ -472,12 +721,11 @@
         const region = (n.mentions || []).some((m) => m.type === "Region")
           ? ' <span class="badge b-region">KADIZ 언급</span>' : "";
         const dom = (n.attrs && n.attrs.domain) ? n.attrs.domain : n.source;
-        const srcBadge = n.source === "stealthmole"
-          ? ' <span class="badge b-stealthmole">다크웹</span>' : "";
+        const srcBadge = n.source === "stealthmole" ? ' <span class="badge b-stealthmole">다크웹</span>' : "";
         div.innerHTML =
-          '<div class="n-title"><a href="' + n.source_url + '" target="_blank" rel="noopener">' +
-          (n.title || "(제목 없음)") + "</a></div>" +
-          '<div class="n-meta"><span>' + dom + " · " + fmtClock(n.ts) + srcBadge + region + "</span>" +
+          '<div class="n-title"><a href="' + esc(n.source_url) + '" target="_blank" rel="noopener">' +
+          esc(n.title || "(제목 없음)") + "</a></div>" +
+          '<div class="n-meta"><span>' + esc(dom) + " · " + fmtClock(n.ts) + srcBadge + region + "</span>" +
           '<span class="badge b-lowconf">신뢰도 ' + n.confidence.toFixed(2) + "</span></div>";
         list.appendChild(div);
       }
@@ -486,42 +734,30 @@
     function drawSourceCounts(counts) {
       const s = (counts && counts.by_source) || {};
       const os = s.opensky || {}, ce = s.celestrak || {}, mt = s.metar || {}, gd = s.gdelt || {};
-      document.getElementById("c-opensky").textContent =
-        (os.observation || 0) + " obs / " + (os.aircraft || 0) + "기";
-      document.getElementById("c-celestrak").textContent =
-        (ce.orbitpass || 0) + " 통과 / " + (ce.satellite || 0) + "위성";
+      document.getElementById("c-opensky").textContent = (os.observation || 0) + " obs / " + (os.aircraft || 0) + "기";
+      document.getElementById("c-celestrak").textContent = (ce.orbitpass || 0) + " 통과 / " + (ce.satellite || 0) + "위성";
       document.getElementById("c-metar").textContent = (mt.weatherstate || 0);
       document.getElementById("c-gdelt").textContent = (gd.newsevent || 0);
     }
-
-    // 상태별 이상징후 마커 색. 비상 스쿽은 미검토라도 심각 → candidate 빨강.
-    // confirmed=검토 확정(짙은 빨강), dismissed=오탐(회색·흐림). 워크플로 상태는 배지로 구분.
-    const STATUS_COLOR = {
-      candidate: "#ff3b3b", confirmed: "#c0392b", dismissed: "#6b7a8d",
-    };
 
     function drawAnomalies(anomalies) {
       anomLayer.clearLayers();
       anomMarkers = {};
       for (const a of anomalies) {
         if (a.lat == null || a.lon == null) continue;
-        // 마커 채움 = 유형 색(P5 5종 구분). 상태(dismissed)는 투명도·테두리로.
         const color = TYPE_COLOR[a.type] || STATUS_COLOR[a.status] || "#ff3b3b";
         const sel = a.id === selectedId;
         const nCorr = (a.correlations || []).length;
         const m = L.circleMarker([a.lat, a.lon], {
           radius: sel ? 15 : 11,
           color: sel ? "#ffffff" : (a.status === "dismissed" ? "#6b7a8d" : "#ffffff"),
-          weight: sel ? 3 : 2,
-          fillColor: color,
-          fillOpacity: a.status === "dismissed" ? 0.30 : 0.72,
-        }).bindTooltip(
-          "<b>" + (TYPE_ICON[a.type] || "⚠") + " " + (TYPE_LABEL[a.type] || a.type) + "</b>" +
-          "<br>" + (a.attrs && a.attrs.callsign ? a.attrs.callsign : "") +
-          (a.attrs && a.attrs.squawk ? " · sq " + a.attrs.squawk : "") +
+          weight: sel ? 3 : 2, fillColor: color,
+          fillOpacity: a.status === "dismissed" ? 0.3 : 0.72,
+        }).bindTooltip("<b>" + (TYPE_ICON[a.type] || "⚠") + " " + (TYPE_LABEL[a.type] || a.type) + "</b>" +
+          "<br>" + esc(a.attrs && a.attrs.callsign ? a.attrs.callsign : "") +
+          (a.attrs && a.attrs.squawk ? " · sq " + esc(a.attrs.squawk) : "") +
           "<br>신뢰도 " + a.confidence.toFixed(2) + " · " + (STATUS_LABEL[a.status] || a.status) +
-          (nCorr ? "<br>🔗 correlated_with " + nCorr + "건" : "")
-        );
+          (nCorr ? "<br>🔗 correlated_with " + nCorr + "건" : ""));
         m.on("click", () => selectAnomaly(a.id));
         m.addTo(anomLayer);
         anomMarkers[a.id] = m;
@@ -532,27 +768,24 @@
     function renderTimeline(anomalies) {
       const list = document.getElementById("tl-list");
       if (!anomalies.length) {
-        list.innerHTML = '<div class="empty">탐지된 이상징후 없음 —<br>' +
-          '합성 주입: <code>python -m scripts.inject_synthetic</code></div>';
+        list.innerHTML = '<div class="empty">탐지된 이상징후 없음<br><br>' +
+          '합성 시나리오 주입:<br><code>python -m scripts.inject_synthetic</code></div>';
         return;
       }
       list.innerHTML = "";
       for (const a of anomalies) {
         const div = document.createElement("div");
         div.className = "anom-item st-" + a.status + (a.id === selectedId ? " sel" : "");
-        const synth = a.attrs && a.attrs.is_synthetic
-          ? ' <span class="badge b-synth">합성</span>' : "";
+        const synth = a.attrs && a.attrs.is_synthetic ? ' <span class="badge b-synth">합성</span>' : "";
         const nCorr = (a.correlations || []).length;
         div.innerHTML =
           '<div class="a-title">' + (TYPE_ICON[a.type] || "⚠") + " " + (TYPE_LABEL[a.type] || a.type) +
-          (a.attrs && a.attrs.squawk ? " " + a.attrs.squawk : "") + synth +
-          (nCorr ? ' <span class="badge b-corr">🔗' + nCorr + '</span>' : '') + '</div>' +
-          '<div class="a-meta"><span>' + (a.attrs && a.attrs.callsign ? a.attrs.callsign : (a.attrs && a.attrs.sat_name ? a.attrs.sat_name : a.type)) +
-          " · " + fmtTime(a.ts) + '</span></div>' +
-          '<div class="a-meta">' +
-          '<span class="badge b-conf">신뢰도 ' + a.confidence.toFixed(2) + '</span>' +
-          '<span class="badge b-' + a.status + '">' + (STATUS_LABEL[a.status] || a.status) + '</span>' +
-          '</div>';
+          (a.attrs && a.attrs.squawk ? " " + esc(a.attrs.squawk) : "") + synth +
+          (nCorr ? ' <span class="badge b-corr">🔗' + nCorr + "</span>" : "") + "</div>" +
+          '<div class="a-meta"><span>' + esc(a.attrs && a.attrs.callsign ? a.attrs.callsign :
+            (a.attrs && a.attrs.sat_name ? a.attrs.sat_name : a.type)) + " · " + fmtTime(a.ts) + "</span></div>" +
+          '<div class="a-meta"><span class="badge b-conf">신뢰도 ' + a.confidence.toFixed(2) + "</span>" +
+          '<span class="badge b-' + a.status + '">' + (STATUS_LABEL[a.status] || a.status) + "</span></div>";
         div.onclick = () => selectAnomaly(a.id);
         list.appendChild(div);
       }
@@ -565,38 +798,60 @@
       box.style.display = "block";
       let ev = "";
       for (const e of (a.evidence || [])) {
-        ev += '<div class="ev"><div class="ev-h">' +
-          (e.callsign || e.icao24) + " · sq " + (e.squawk || "—") + "</div>" +
-          "관측 " + fmtTime(e.ts) + " · 출처 " + e.source + "<br>" +
-          '<a href="' + e.source_url + '" target="_blank" rel="noopener">' + e.source_url + "</a></div>";
+        ev += '<div class="ev"><div class="ev-h">' + esc(e.callsign || e.icao24) + " · sq " + esc(e.squawk || "—") + "</div>" +
+          "관측 " + fmtTime(e.ts) + " · 출처 " + esc(e.source) + "<br>" +
+          '<a href="' + esc(e.source_url) + '" target="_blank" rel="noopener">' + esc(e.source_url) + "</a></div>";
       }
-      // P5: 비-Observation 근거(위성 근접=OrbitPass)를 별도로 노출.
       let evObj = "";
       for (const e of (a.evidence_objects || [])) {
-        if (e.type === "Observation") continue;  // 위 ev 카드와 중복 방지
-        evObj += '<div class="ev"><div class="ev-h">' + e.label + " · " + e.type + "</div>" +
-          (e.source_url ? '<a href="' + e.source_url + '" target="_blank" rel="noopener">' + e.source_url + "</a>" : "") +
-          "</div>";
+        if (e.type === "Observation") continue;
+        evObj += '<div class="ev"><div class="ev-h">' + esc(e.label) + " · " + esc(e.type) + "</div>" +
+          (e.source_url ? '<a href="' + esc(e.source_url) + '" target="_blank" rel="noopener">' + esc(e.source_url) + "</a>" : "") + "</div>";
       }
-      // P5: correlated_with 상관(교차소스 내러티브)을 노출.
       let corr = "";
       for (const c of (a.correlations || [])) {
-        corr += '<div class="corr"><span class="ct">' + c.type + "</span> · " + c.label + "</div>";
+        corr += '<div class="corr"><span class="ct">' + esc(c.type) + "</span> · " + esc(c.label) + "</div>";
       }
       const done = a.status !== "candidate";
+      const nEv = (a.evidence || []).filter((e) => e.lat != null && e.lon != null).length;
       box.innerHTML =
-        '<div class="d-expl">' + a.explanation + "</div>" +
+        '<div class="d-expl">' + esc(a.explanation) + "</div>" +
+        (nEv ? '<div class="flowhint">지도에서 이 이상징후의 근거 관측 ' + nEv + '건을 펄스·흐름선으로 강조합니다.</div>' : "") +
         '<div class="d-sect">근거 (evidence · provenance)</div>' + (ev || evObj || "—") +
         (ev && evObj ? evObj : "") +
         (corr ? '<div class="d-sect">교차소스 상관 (correlated_with)</div>' + corr : "") +
         '<div class="actions">' +
-        '<button class="btn-confirm" ' + (done ? "disabled" : "") +
-        ' onclick="act(\'' + a.id + "','confirm')\">확인 (confirm)</button>" +
-        '<button class="btn-dismiss" ' + (done ? "disabled" : "") +
-        ' onclick="act(\'' + a.id + "','dismiss')\">기각 (dismiss)</button>" +
-        "</div>" +
-        '<div class="backend">설명 백엔드: ' + (a.explainer_backend || "—") +
-        " · 상태: " + (STATUS_LABEL[a.status] || a.status) + "</div>";
+        '<button class="btn-confirm" ' + (done ? "disabled" : "") + ' onclick="act(\'' + esc(a.id) + "','confirm')\">확인 (confirm)</button>" +
+        '<button class="btn-dismiss" ' + (done ? "disabled" : "") + ' onclick="act(\'' + esc(a.id) + "','dismiss')\">기각 (dismiss)</button></div>" +
+        '<div class="backend">설명 백엔드: ' + esc(a.explainer_backend || "—") + " · 상태: " + (STATUS_LABEL[a.status] || a.status) + "</div>";
+    }
+
+    // ── 근거 흐름 시각화 ──
+    function clearFlow() {
+      evidenceLayer.clearLayers();
+      citeLayer.clearLayers();
+      document.getElementById("flowbar").classList.remove("show");
+    }
+    function showFlowbar(txt) {
+      document.getElementById("flow-txt").textContent = txt;
+      document.getElementById("flowbar").classList.add("show");
+    }
+    // 이상징후 → 근거 관측 흐름선(evidenced_by) + 펄스
+    function drawEvidenceFlow(a) {
+      evidenceLayer.clearLayers();
+      if (a.lat == null || a.lon == null) return;
+      const anchor = [a.lat, a.lon];
+      let n = 0;
+      for (const e of (a.evidence || [])) {
+        if (e.lat == null || e.lon == null) continue;
+        L.polyline([anchor, [e.lat, e.lon]], { className: "ev-flow", weight: 2.2, opacity: 0.95 }).addTo(evidenceLayer);
+        L.circleMarker([e.lat, e.lon], { className: "ev-ring", radius: 9, weight: 2 })
+          .bindTooltip("근거 관측 · " + esc(e.callsign || e.icao24) + (e.squawk ? " sq " + esc(e.squawk) : "")).addTo(evidenceLayer);
+        n++;
+      }
+      // 비-관측 근거(위성 통과 등)는 좌표 없으면 생략(연결선 불가) — detail 카드에 표기됨.
+      if (n) showFlowbar("이상징후 → 근거 관측 " + n + "건 (evidenced_by 흐름)");
+      else document.getElementById("flowbar").classList.remove("show");
     }
 
     function selectAnomaly(id) {
@@ -606,42 +861,75 @@
         map.setView([a.lat, a.lon], Math.max(map.getZoom(), 8), { animate: true });
         const m = anomMarkers[id];
         if (m) m.openTooltip();
+        drawEvidenceFlow(a);
       }
-      drawAnomalies(lastAnomalies);   // 선택 강조 반영
+      drawAnomalies(lastAnomalies);
       renderTimeline(lastAnomalies);
       renderDetail();
     }
 
-    // confirm/dismiss → POST → 즉시 재조회 반영
     async function act(id, action) {
-      try {
-        await postJSON("/api/anomalies/" + encodeURIComponent(id) + "/" + action);
-        await refresh();
-      } catch (e) {
-        alert("액션 실패: " + e.message);
-      }
+      try { await postJSON("/api/anomalies/" + encodeURIComponent(id) + "/" + action); await refresh(); }
+      catch (e) { alert("액션 실패: " + e.message); }
     }
     window.act = act;
 
+    // ════════════════════════════════════════════════════════════
+    // 데이터 갱신 + LIVE 상태
+    // ════════════════════════════════════════════════════════════
+    let liveState = { last_poll_ts: null, live: false, mode: null, interval: null, recvAt: 0, server_now: 0 };
+    let refreshMs = 30000;
+    let refreshTimer = null;
+    let pendingAnomSelect = new URLSearchParams(location.search).get("anom");
+
+    function renderLiveBadge() {
+      const el = document.getElementById("live");
+      const lab = el.querySelector(".lab");
+      const ago = el.querySelector(".ago");
+      el.classList.remove("on", "replay", "stale");
+      if (liveState.last_poll_ts == null) {
+        // 폴러 없음 = replay/정적(스냅샷) 모드
+        el.classList.add("replay");
+        lab.textContent = "재생 모드";
+        ago.textContent = "· 고정 스냅샷";
+        return;
+      }
+      // 폴러 있음: 경과 = (클라 경과 보정) server_now - last_poll_ts
+      const elapsed = Math.max(0, Math.round((liveState.server_now + (Date.now() - liveState.recvAt) / 1000) - liveState.last_poll_ts));
+      if (liveState.live) { el.classList.add("on"); lab.textContent = "LIVE"; }
+      else { el.classList.add("stale"); lab.textContent = liveState.mode === "stopped" ? "폴링 정지" : "지연"; }
+      ago.textContent = "· " + elapsed + "초 전 갱신";
+    }
+    // 1초 틱 — "N초 전"만 갱신(가벼움)
+    setInterval(() => { if (liveState.last_poll_ts != null) renderLiveBadge(); }, 1000);
+
+    async function pollLive() {
+      try {
+        const lv = await getJSON("/api/live");
+        liveState = { last_poll_ts: lv.last_poll_ts, live: !!lv.live, mode: lv.mode || null,
+          interval: lv.interval || null, server_now: lv.server_now || Math.floor(Date.now() / 1000), recvAt: Date.now() };
+        renderLiveBadge();
+        // 폴링 주기에 맞춰 자동 갱신 간격 조정(하한 10s)
+        const want = liveState.interval ? Math.max(10, liveState.interval) * 1000 : 30000;
+        if (want !== refreshMs) { refreshMs = want; scheduleRefresh(); }
+      } catch (e) { /* 조용히 무시 — 다음 사이클 재시도 */ }
+    }
+
+    function scheduleRefresh() {
+      if (refreshTimer) clearInterval(refreshTimer);
+      refreshTimer = setInterval(refresh, refreshMs);
+    }
+
     async function refresh() {
       try {
-        const [regions, tracks, obs, anomalies, passes, weather, news, counts] =
-          await Promise.all([
-            getJSON("/api/regions"),
-            getJSON("/api/tracks"),
-            getJSON("/api/observations"),
-            getJSON("/api/anomalies"),
-            getJSON("/api/orbitpasses"),
-            getJSON("/api/weather"),
-            getJSON("/api/news"),
-            getJSON("/api/counts"),
-          ]);
+        const [regions, tracks, obs, anomalies, passes, weather, news, counts] = await Promise.all([
+          getJSON("/api/regions"), getJSON("/api/tracks"), getJSON("/api/observations"),
+          getJSON("/api/anomalies"), getJSON("/api/orbitpasses"), getJSON("/api/weather"),
+          getJSON("/api/news"), getJSON("/api/counts"),
+        ]);
         lastAnomalies = anomalies;
         lastPasses = passes;
-        // 선택 항목이 없거나 사라졌으면 최신 이상징후를 자동 선택(위협 보드 기본 뷰).
-        if (anomalies.length && !anomalies.some((x) => x.id === selectedId)) {
-          selectedId = anomalies[0].id;
-        }
+        if (anomalies.length && !anomalies.some((x) => x.id === selectedId)) selectedId = anomalies[0].id;
         drawRegions(regions);
         drawTracks(tracks);
         drawOrbitPasses(passes);
@@ -652,25 +940,26 @@
         drawWeather(weather);
         drawNews(news);
         drawSourceCounts(counts);
-        document.getElementById("stamp").textContent =
-          "갱신 " + new Date().toLocaleTimeString("ko-KR");
+        document.getElementById("stamp").textContent = "갱신 " + new Date().toLocaleTimeString("ko-KR");
+        // 딥링크 ?anom=<id|first> — 데이터 도착 후 1회 자동 선택(근거 흐름 재현·공유 링크)
+        if (pendingAnomSelect && lastAnomalies.length) {
+          const id = pendingAnomSelect === "first" ? lastAnomalies[0].id : pendingAnomSelect;
+          pendingAnomSelect = null;
+          if (lastAnomalies.some((x) => x.id === id)) selectAnomaly(id);
+        }
+        pollLive();
       } catch (e) {
         document.getElementById("stamp").textContent = "갱신 실패: " + e.message;
       }
     }
 
-    // 위성 궤적 토글 — 즉시 재그리기(재fetch 없이 마지막 데이터로).
     document.getElementById("tog-sat").addEventListener("change", (ev) => {
-      showSat = ev.target.checked;
-      drawOrbitPasses(lastPasses);
+      showSat = ev.target.checked; drawOrbitPasses(lastPasses);
     });
 
     // ════════════════════════════════════════════════════════════
-    // P4 코파일럿: 채팅 · 문장별 cites 배지 · 서브그래프 뷰
+    // 코파일럿: 의도별 답변 렌더
     // ════════════════════════════════════════════════════════════
-    let lastAssessment = null;                       // 마지막 /api/assess 응답
-    let citeLayer = L.layerGroup().addTo(map);       // cite 클릭 하이라이트 마커
-
     const KIND_META = {
       summary:     ["요약",   "#234b6e", "#a9d4ff"],
       anomaly:     ["이상징후", "#5a1414", "#ff9a9a"],
@@ -678,19 +967,28 @@
       satellite:   ["위성",   "#123a3a", "#8fe4e4"],
       weather:     ["기상",   "#183a52", "#8fc9ff"],
       news:        ["뉴스",   "#3a2a12", "#ffc078"],
+      flight:      ["항적",   "#25384f", "#bcd3ea"],
     };
+    const INTENT_LABEL = { situation_summary: "상황 요약", count: "카운트", filter: "필터",
+      entity_explain: "엔티티 설명", why: "근거(왜)", correlation: "교차상관", weather: "기상", news: "뉴스" };
+    const COUNT_TARGET_LABEL = { flights: "항적", military: "군용 추정 항적", anomalies: "이상징후",
+      passes: "위성 통과", news: "OSINT 뉴스" };
 
     const DEMO_QUERIES = [
-      "지금 KADIZ 근방 이상한 거 있어?",
-      "최근 1시간 위성 통과랑 겹치는 이상징후는?",
-      "서해 쪽 기상이랑 뉴스 맥락 요약해줘",
+      ["상황요약", "지금 KADIZ 근방 이상한 거 있어?"],
+      ["카운트", "군용기 몇 대야?"],
+      ["필터", "군용기만 보여줘"],
+      ["왜", "이 이상징후 왜 위험해?"],
+      ["은닉정황", "은닉 정황 있어?"],
+      ["기상", "서해 쪽 기상 어때?"],
     ];
     function renderQuickButtons() {
-      const q = document.getElementById("chat-quick");
-      q.innerHTML = "";
-      for (const dq of DEMO_QUERIES) {
+      const q = document.getElementById("quick");
+      q.innerHTML = '<span class="ql">질의 예시:</span>';
+      for (const [lab, dq] of DEMO_QUERIES) {
         const b = document.createElement("button");
-        b.textContent = dq;
+        b.textContent = lab;
+        b.title = dq;
         b.onclick = () => { document.getElementById("chat-input").value = dq; submitChat(); };
         q.appendChild(b);
       }
@@ -700,141 +998,281 @@
       const inp = document.getElementById("chat-input");
       const q = inp.value.trim();
       if (!q) return;
-      const body = document.getElementById("chat-body");
-      body.innerHTML = '<div class="empty">질의 처리 중… (병렬 온톨로지 read → 문장 조립)</div>';
+      document.getElementById("copilot").classList.remove("min");
+      document.getElementById("tg-cop").querySelector(".ic").textContent = "▾";
+      const body = document.getElementById("answer");
+      body.innerHTML = '<div class="loading"><span class="spinner"></span>질의 처리 중 — 병렬 온톨로지 read → 문장 조립(근거 강제)…</div>';
       try {
         const r = await fetch("/api/assess", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query: q }),
-          cache: "no-store",
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: q }), cache: "no-store",
         });
         if (!r.ok) throw new Error("HTTP " + r.status);
         lastAssessment = await r.json();
         renderAnswer(lastAssessment);
         document.getElementById("sg-open").disabled = !lastAssessment.assessment_id;
       } catch (e) {
-        body.innerHTML = '<div class="empty">질의 실패: ' + e.message + "</div>";
+        body.innerHTML = '<div class="empty">질의 실패: ' + esc(e.message) + "</div>";
       }
     }
     window.submitChat = submitChat;
-    document.getElementById("chat-input").addEventListener("keydown", (e) => {
-      if (e.key === "Enter") submitChat();
-    });
+    document.getElementById("chat-input").addEventListener("keydown", (e) => { if (e.key === "Enter") submitChat(); });
 
-    function citeChip(id) {
-      const obj = (lastAssessment && lastAssessment.cited_objects &&
-        lastAssessment.cited_objects[id]) || null;
+    function citeChip(id, plain) {
+      const obj = (lastAssessment && lastAssessment.cited_objects && lastAssessment.cited_objects[id]) || null;
       const type = obj ? obj.type : "";
       const label = obj ? obj.label : id;
-      return '<span class="cite-chip t-' + type + '" title="' + id +
-        '" onclick="highlightCite(\'' + id + '\')">' + label + "</span>";
+      return '<span class="cite-chip ' + (plain ? "plain " : "") + "t-" + esc(type) + '" title="' + esc(id) +
+        '" onclick="highlightCite(\'' + esc(id).replace(/'/g, "\\'") + "')\">" + esc(label) + "</span>";
+    }
+    function citesRow(cites) { return cites.map((c) => citeChip(c)).join(" "); }
+
+    // 투명성 스트립 (의도·슬롯·창·히트)
+    function xparencyStrip(d) {
+      const w = d.window || {}, m = d.intent_meta || {};
+      const slotStr = Object.keys(d.slots || {}).length
+        ? Object.entries(d.slots).map(([k, v]) => k + "=" + v).join(", ") : "—";
+      const c = d.counts || {};
+      let html = '<div class="xparency">';
+      html += '<span class="xchip intent">의도 <b>' + esc(INTENT_LABEL[d.intent] || d.intent) + "</b></span>";
+      html += '<span class="xchip">슬롯 <b>' + esc(slotStr) + "</b></span>";
+      if (m.backend) html += '<span class="xchip">분류 <b>' + esc(m.backend) + "</b>" +
+        (m.matched && m.matched.length ? " · " + esc(m.matched.join("/")) : "") + "</span>";
+      html += '<span class="xchip">지역 <b>' + esc(d.region ? d.region.name : "—") + "</b></span>";
+      html += '<span class="xchip">창 <b>' + esc(w.label || "—") + "</b></span>";
+      html += '<span class="xchip">히트 항적 ' + (c.flights || 0) + "·이상 " + (c.anomalies || 0) +
+        "·통과 " + (c.passes || 0) + "·기상 " + (c.weather || 0) + "·뉴스 " + (c.news || 0) + "</span>";
+      html += "</div>";
+      return html;
+    }
+
+    function ansHead(d) {
+      return '<div class="ans-head"><span class="intent-pill">' + esc(INTENT_LABEL[d.intent] || d.intent) + "</span>" +
+        '<span class="conf">종합 신뢰도 ' + d.confidence.toFixed(2) + " · 서술 " + esc(d.produced_by) +
+        " · 문장 " + d.sentences.length + "개 · 전부 근거 보유</span></div>";
+    }
+
+    // 문장 카드 (공통) — "지도" 버튼으로 문장 전체 근거 하이라이트
+    function sentCard(s, idx) {
+      const meta = KIND_META[s.kind] || ["", "#2a3f57", "#9fc4e8"];
+      const chips = s.cites.map((c) => citeChip(c)).join(" ");
+      return '<div class="a-sent" style="border-left-color:' + meta[1] + '">' +
+        '<div class="a-text">' + esc(s.text) + '</div>' +
+        '<div class="a-foot">' +
+        '<span class="kind-badge" style="background:' + meta[1] + ';color:' + meta[2] + '">' + meta[0] + '</span>' +
+        '<span class="conf-badge">신뢰도 ' + s.confidence.toFixed(2) + '</span> ' + chips + ' ' +
+        '<span class="sent-map" onclick="highlightSentence(' + idx + ')">◎ 지도에 근거</span>' +
+        '</div></div>';
     }
 
     function renderAnswer(d) {
-      const body = document.getElementById("chat-body");
-      const w = d.window || {};
-      const defaulted = (w.defaulted && w.defaulted.length)
-        ? " · 기본값 사용: " + w.defaulted.join(",") : "";
-      let html =
-        '<div class="parsed">해석(투명성): 지역 <b>' + (d.region ? d.region.name : "—") +
-        "</b> · 시간창 <b>" + (w.label || "—") + "</b> (" +
-        (w.start_iso || "") + " ~ " + (w.end_iso || "") + ")" + defaulted +
-        " · 소스 히트: 항적 " + d.counts.flights + "/이상 " + d.counts.anomalies +
-        "/통과 " + d.counts.passes + "/기상 " + d.counts.weather +
-        "/뉴스 " + d.counts.news + "</div>";
-
+      const body = document.getElementById("answer");
+      clearFlow();
+      // no_evidence — 정직 보고
       if (d.no_evidence) {
-        html += '<div class="a-sent" style="border-left-color:#6b7a8d">' +
-          '<div class="a-text">' + d.summary + "</div></div>";
-        body.innerHTML = html;
+        body.innerHTML = xparencyStrip(d) +
+          '<div class="why-lead" style="background:rgba(45,53,61,0.4);border-color:#3a4652;border-left-color:#6b7a8d">' +
+          '<div class="wl-t" style="color:#cdd8e4">' + esc(d.summary) + "</div></div>";
         return;
       }
-
-      html += '<div class="a-head"><span class="kind-badge" style="background:#123a2a;color:#7ce0a8">' +
-        "종합 신뢰도 " + d.confidence.toFixed(2) + '</span>' +
-        '<span class="conf">서술: ' + d.produced_by + " · 문장 " + d.sentences.length +
-        "개 · 전부 근거(cites) 보유</span></div>";
-
-      for (const s of d.sentences) {
-        const meta = KIND_META[s.kind] || ["", "#2a3f57", "#9fc4e8"];
-        let chips = "";
-        for (const c of s.cites) chips += citeChip(c) + " ";
-        html +=
-          '<div class="a-sent" style="border-left-color:' + meta[1] + '">' +
-          '<div class="a-text">' + s.text + "</div>" +
-          '<div class="a-foot">' +
-          '<span class="kind-badge" style="background:' + meta[1] + ";color:" + meta[2] +
-          '">' + meta[0] + "</span>" +
-          '<span class="cite-chip" style="cursor:default;border-color:#1c3a2a;color:#7ce0a8">신뢰도 ' +
-          s.confidence.toFixed(2) + "</span>" +
-          chips +
-          "</div></div>";
-      }
+      let html = ansHead(d) + xparencyStrip(d);
+      // 의도별 분기
+      if (d.intent === "count") html += renderCount(d);
+      else if (d.intent === "filter") html += renderFilter(d);
+      else if (d.intent === "why" || d.intent === "entity_explain") html += renderWhy(d);
+      else if (d.intent === "correlation") html += renderCorrelation(d);
+      else if (d.intent === "weather" || d.intent === "news") html += renderSingle(d);
+      else html += renderGrouped(d);   // situation_summary + 폴백
       body.innerHTML = html;
+      body.scrollTop = 0;
     }
 
-    // cite 배지 클릭 → 지도 하이라이트(+원 소스). 좌표 없는 근거(뉴스 등)는 원문 링크로.
+    // count — 큰 숫자 히어로
+    function renderCount(d) {
+      const s = d.sentences[0];
+      if (!s) return renderGrouped(d);
+      const target = (d.slots && d.slots.target) || "flights";
+      const m = s.text.match(/(\d[\d,]*)\s*(대|건|개)/);
+      const num = m ? m[1] : String(s.cites.length);
+      const unit = m ? m[2] : "건";
+      return '<div class="count-hero"><div class="big">' + esc(num) + '<span class="unit">' + esc(unit) + "</span></div>" +
+        '<div class="cmeta"><div class="lab">' + esc(COUNT_TARGET_LABEL[target] || "대상") + "</div>" +
+        '<div class="cap">' + esc(s.text) + "</div>" +
+        '<div class="cites">' + citesRow(s.cites) + "</div></div></div>";
+    }
+
+    // filter — 헤드라인 + 항적 카드 리스트
+    function renderFilter(d) {
+      const head = d.sentences.find((s) => s.kind === "summary");
+      const flights = d.sentences.filter((s) => s.kind === "flight");
+      let html = "";
+      if (head) html += '<div class="headline"><div class="ht">' + esc(head.text) + "</div>" +
+        '<div class="hc">' + citesRow(head.cites) + "</div></div>";
+      if (!flights.length) html += '<div class="empty">조건에 맞는 항적이 없습니다.</div>';
+      for (const f of flights) {
+        const cid = f.cites[0];
+        html += '<div class="flight-card" onclick="highlightCite(\'' + esc(cid).replace(/'/g, "\\'") + '\')">' +
+          '<span class="fi">✈️</span><div class="ft"><div class="fc">' + esc((f.text.split("—")[0] || "").trim()) + '</div>' +
+          '<div class="fd">' + esc((f.text.split("—").slice(1).join("—") || "").trim()) + '</div></div>' +
+          '<span class="fgo">›</span></div>';
+      }
+      return html;
+    }
+
+    // why / entity_explain — 근거 카드 중심
+    function renderWhy(d) {
+      const anomSents = d.sentences.filter((s) => s.kind === "anomaly");
+      const lead = anomSents[0] || d.sentences[0];
+      const rest = d.sentences.filter((s) => s !== lead);
+      let html = "";
+      if (lead) html += '<div class="why-lead"><div class="wl-t">' + esc(lead.text) + "</div>" +
+        '<div class="wl-c">' + citesRow(lead.cites) + "</div></div>";
+      for (const s of rest) {
+        html += '<div class="rationale"><div class="rt">' + esc(s.text) + "</div>" +
+          '<div class="rc">' + citesRow(s.cites) + "</div></div>";
+      }
+      return html;
+    }
+
+    // correlation — 서브그래프 유도 + 앵커 이상징후별 클러스터
+    function renderCorrelation(d) {
+      let html = '<div class="corr-cta"><span class="ci">🕸</span><div class="cbody">' +
+        '<div class="ch">교차소스 "은닉 정황" ' + d.sentences.length + "개 상관 문장</div>" +
+        '<div class="cs">여러 소스(위성 통과·OSINT 뉴스·다른 이상징후)가 같은 시공간에서 얽힙니다. 그래프로 보면 한눈에 들어옵니다.</div></div>' +
+        '<button onclick="openSubgraph()"' + (d.assessment_id ? "" : " disabled") + ">서브그래프 열기</button></div>";
+      // 앵커 이상징후(첫 cite = Anomaly) 기준 클러스터
+      const groups = {};
+      for (const s of d.sentences) {
+        const anchor = s.cites[0] || "기타";
+        (groups[anchor] = groups[anchor] || []).push(s);
+      }
+      for (const [anchor, sents] of Object.entries(groups)) {
+        const obj = (d.cited_objects && d.cited_objects[anchor]) || null;
+        const label = obj ? obj.label : anchor;
+        html += '<details class="cluster"><summary>🔗 ' + esc(label) +
+          '<span class="cx">' + sents.length + "개 상관</span></summary><div class=\"cbdy\">";
+        for (let i = 0; i < d.sentences.length; i++) {
+          if (sents.includes(d.sentences[i])) html += sentCard(d.sentences[i], i);
+        }
+        html += "</div></details>";
+      }
+      return html;
+    }
+
+    // weather / news — 단일 카드
+    function renderSingle(d) {
+      let html = "";
+      for (let i = 0; i < d.sentences.length; i++) html += sentCard(d.sentences[i], i);
+      return html || '<div class="empty">해당 데이터 없음</div>';
+    }
+
+    // situation_summary + 폴백 — kind별 접이식 그룹
+    const GROUP_ORDER = ["summary", "anomaly", "correlation", "satellite", "weather", "news", "flight"];
+    const GROUP_OPEN = { summary: true, anomaly: true };  // 기본 펼침
+    function renderGrouped(d) {
+      // 헤드라인(summary[0])은 상단 카드로
+      const head = d.sentences.find((s) => s.kind === "summary");
+      let html = "";
+      if (head) {
+        const hi = d.sentences.indexOf(head);
+        html += '<div class="headline"><div class="ht">' + esc(head.text) + '</div>' +
+          '<div class="hc">' + citesRow(head.cites) +
+          '<span class="sent-map" onclick="highlightSentence(' + hi + ')">◎ 지도에 근거</span></div></div>';
+      }
+      // kind별 그룹
+      const byKind = {};
+      d.sentences.forEach((s, i) => {
+        if (s === head) return;
+        (byKind[s.kind] = byKind[s.kind] || []).push(i);
+      });
+      const kinds = GROUP_ORDER.filter((k) => byKind[k]).concat(
+        Object.keys(byKind).filter((k) => !GROUP_ORDER.includes(k)));
+      for (const k of kinds) {
+        const meta = KIND_META[k] || [k, "#2a3f57", "#9fc4e8"];
+        const idxs = byKind[k];
+        const open = GROUP_OPEN[k] ? " open" : "";
+        html += "<details class=\"grp\"" + open + '><summary><span class="kind-badge" style="background:' +
+          meta[1] + ";color:" + meta[2] + '">' + meta[0] + "</span> " + meta[0] +
+          '<span class="gc">' + idxs.length + "개</span><span class=\"chev\">▾</span></summary><div class=\"gbody\">";
+        for (const i of idxs) html += sentCard(d.sentences[i], i);
+        html += "</div></details>";
+      }
+      return html;
+    }
+
+    // ── cite 하이라이트 (지도 펄스 + 원 소스) ──
     function highlightCite(id) {
-      const obj = (lastAssessment && lastAssessment.cited_objects &&
-        lastAssessment.cited_objects[id]) || null;
+      const obj = (lastAssessment && lastAssessment.cited_objects && lastAssessment.cited_objects[id]) || null;
       if (!obj) return;
       citeLayer.clearLayers();
       if (obj.lat != null && obj.lon != null) {
         map.setView([obj.lat, obj.lon], Math.max(map.getZoom(), 7), { animate: true });
-        let html = "<b>" + obj.label + "</b><br><span style='color:#8aa'>" + obj.type + "</span>";
-        if (obj.source_url) html +=
-          "<br><a href='" + obj.source_url + "' target='_blank' rel='noopener'>원 소스 →</a>";
-        L.circleMarker([obj.lat, obj.lon], {
-          radius: 17, color: "#ffffff", weight: 3,
-          fillColor: "#7ce0a8", fillOpacity: 0.30,
-        }).addTo(citeLayer).bindPopup(html).openPopup();
+        L.circleMarker([obj.lat, obj.lon], { className: "cite-ring", radius: 11, weight: 2 }).addTo(citeLayer);
+        let html = "<b>" + esc(obj.label) + "</b><br><span style='color:#8aa'>" + esc(obj.type) +
+          (obj.status ? " · " + esc(obj.status) : "") + "</span>";
+        if (obj.source_url) html += "<br><a href='" + esc(obj.source_url) + "' target='_blank' rel='noopener'>원 소스 →</a>";
+        L.circleMarker([obj.lat, obj.lon], { radius: 7, color: "#ffffff", weight: 2,
+          fillColor: "#7ce0a8", fillOpacity: 0.85 }).addTo(citeLayer).bindPopup(html).openPopup();
+        showFlowbar("근거: " + obj.label);
       } else if (obj.source_url) {
         window.open(obj.source_url, "_blank", "noopener");
       }
     }
     window.highlightCite = highlightCite;
 
-    // ── 서브그래프 (자체 SVG 방사형 레이아웃, 외부 라이브러리 없음) ──
+    // ── 문장 전체 근거 하이라이트 (여러 cite를 함께 표시 + fitBounds) ──
+    function highlightSentence(idx) {
+      const s = lastAssessment && lastAssessment.sentences[idx];
+      if (!s) return;
+      citeLayer.clearLayers();
+      const pts = [];
+      for (const id of s.cites) {
+        const obj = lastAssessment.cited_objects[id];
+        if (obj && obj.lat != null && obj.lon != null) {
+          L.circleMarker([obj.lat, obj.lon], { className: "cite-ring", radius: 11, weight: 2 }).addTo(citeLayer);
+          L.circleMarker([obj.lat, obj.lon], { radius: 6, color: "#fff", weight: 1.5,
+            fillColor: "#7ce0a8", fillOpacity: 0.85 }).bindTooltip(esc(obj.label)).addTo(citeLayer);
+          pts.push([obj.lat, obj.lon]);
+        }
+      }
+      if (pts.length === 1) map.setView(pts[0], Math.max(map.getZoom(), 7), { animate: true });
+      else if (pts.length > 1) map.fitBounds(pts, { padding: [60, 60], maxZoom: 9 });
+      if (pts.length) showFlowbar("이 문장의 근거 " + pts.length + "건을 지도에 표시");
+      else if (s.cites.length) showFlowbar("이 문장의 근거는 좌표 없음(뉴스/기상 등) — 배지로 원 소스 확인");
+    }
+    window.highlightSentence = highlightSentence;
+
+    // ════════════════════════════════════════════════════════════
+    // 서브그래프 (자체 SVG 방사형, 외부 라이브러리 없음 — DR-0006)
+    // ════════════════════════════════════════════════════════════
     const SVGNS = "http://www.w3.org/2000/svg";
-    const NODE_COLOR = {
-      SituationAssessment: "#7ce0a8", Anomaly: "#ff5a5a", Observation: "#ffd166",
-      OrbitPass: "#38d9d9", WeatherState: "#6fb4ff", NewsEvent: "#b79bff",
-      Aircraft: "#ffb454",
-    };
-    const NODE_R = {
-      SituationAssessment: 16, Anomaly: 11, Observation: 6, OrbitPass: 8,
-      WeatherState: 8, NewsEvent: 8, Aircraft: 7,
-    };
+    const NODE_COLOR = { SituationAssessment: "#7ce0a8", Anomaly: "#ff5a5a", Observation: "#ffd166",
+      OrbitPass: "#38d9d9", WeatherState: "#6fb4ff", NewsEvent: "#b79bff", Aircraft: "#ffb454" };
+    const NODE_R = { SituationAssessment: 16, Anomaly: 11, Observation: 6, OrbitPass: 8,
+      WeatherState: 8, NewsEvent: 8, Aircraft: 7 };
 
     async function openSubgraph() {
       if (!lastAssessment || !lastAssessment.assessment_id) return;
       try {
-        const sg = await getJSON("/api/subgraph?assessment_id=" +
-          encodeURIComponent(lastAssessment.assessment_id));
+        const sg = await getJSON("/api/subgraph?assessment_id=" + encodeURIComponent(lastAssessment.assessment_id));
         document.getElementById("sg-title").textContent =
           (lastAssessment.region ? lastAssessment.region.name : "") + " · " +
           (lastAssessment.window ? lastAssessment.window.label : "");
         document.getElementById("sg-modal").classList.add("open");
         renderSubgraph(sg);
         renderSgLegend();
-      } catch (e) {
-        alert("서브그래프 실패: " + e.message);
-      }
+      } catch (e) { alert("서브그래프 실패: " + e.message); }
     }
-    function closeSubgraph() {
-      document.getElementById("sg-modal").classList.remove("open");
-    }
+    function closeSubgraph() { document.getElementById("sg-modal").classList.remove("open"); }
     window.openSubgraph = openSubgraph;
     window.closeSubgraph = closeSubgraph;
 
     function renderSgLegend() {
       const el = document.getElementById("sg-legend");
-      const types = ["SituationAssessment","Anomaly","Observation","OrbitPass","WeatherState","NewsEvent","Aircraft"];
-      const label = { SituationAssessment:"상황평가", Anomaly:"이상징후", Observation:"관측",
-        OrbitPass:"위성통과", WeatherState:"기상", NewsEvent:"뉴스", Aircraft:"항공기" };
-      el.innerHTML = types.map((t) =>
-        '<span><i style="background:' + NODE_COLOR[t] + '"></i>' + label[t] + "</span>").join("") +
+      const types = ["SituationAssessment", "Anomaly", "Observation", "OrbitPass", "WeatherState", "NewsEvent", "Aircraft"];
+      const label = { SituationAssessment: "상황평가", Anomaly: "이상징후", Observation: "관측",
+        OrbitPass: "위성통과", WeatherState: "기상", NewsEvent: "뉴스", Aircraft: "항공기" };
+      el.innerHTML = types.map((t) => '<span><i style="background:' + NODE_COLOR[t] + '"></i>' + label[t] + "</span>").join("") +
         '<span style="margin-left:auto">엣지: aggregates(빨강)·cites(파랑)·evidenced_by/involves(깊이)·' +
         '<span style="color:#38d9d9">correlated_with(청록 점선)</span></span>';
     }
@@ -844,7 +1282,6 @@
       while (svg.firstChild) svg.removeChild(svg.firstChild);
       const W = svg.clientWidth || 760, H = svg.clientHeight || 540;
       const cx = W / 2, cy = H / 2;
-
       const childrenOf = {};
       for (const e of sg.edges) (childrenOf[e.src] = childrenOf[e.src] || []).push(e.dst);
       const pos = {};
@@ -855,7 +1292,6 @@
         const a = -Math.PI / 2 + (i / Math.max(1, l1.length)) * 2 * Math.PI;
         pos[id] = [cx + R1 * Math.cos(a), cy + R1 * Math.sin(a)];
       });
-      // 2홉: 각 1홉 노드의 자식을 부모 각도 주변에 퍼뜨림
       l1.forEach((pid, i) => {
         const base = -Math.PI / 2 + (i / Math.max(1, l1.length)) * 2 * Math.PI;
         const kids = (childrenOf[pid] || []).filter((k) => pos[k] === undefined);
@@ -869,8 +1305,6 @@
       for (const n of sg.nodes) if (pos[n.id] === undefined) {
         const a = extra * 0.6; pos[n.id] = [cx + R2 * Math.cos(a), cy + R2 * Math.sin(a)]; extra++;
       }
-
-      // 엣지 먼저(노드 밑에 깔림)
       for (const e of sg.edges) {
         const s = pos[e.src], t = pos[e.dst];
         if (!s || !t) continue;
@@ -885,9 +1319,6 @@
         lbl.textContent = e.link_type;
         svg.appendChild(lbl);
       }
-      // 노드
-      const nodeById = {};
-      for (const n of sg.nodes) nodeById[n.id] = n;
       for (const n of sg.nodes) {
         const p = pos[n.id]; if (!p) continue;
         const g = document.createElementNS(SVGNS, "g");
@@ -906,46 +1337,86 @@
         svg.appendChild(g);
       }
     }
-
     function clip(s, n) { s = s || ""; return s.length <= n ? s : s.slice(0, n - 1) + "…"; }
 
     function selectSgNode(n) {
-      document.querySelectorAll(".sg-node").forEach((el) =>
-        el.classList.toggle("sel", el.getAttribute("data-id") === n.id));
+      document.querySelectorAll(".sg-node").forEach((el) => el.classList.toggle("sel", el.getAttribute("data-id") === n.id));
       const d = document.getElementById("sg-detail");
-      let html = "<div><b style='color:" + (NODE_COLOR[n.type] || "#fff") + "'>" +
-        n.type + "</b></div><div style='margin:4px 0 8px'>" + n.label + "</div>";
-      html += '<div class="k">id</div><div style="word-break:break-all">' + n.id + "</div>";
-      if (n.status) html += '<div class="k" style="margin-top:6px">상태</div><div>' + n.status + "</div>";
-      if (n.confidence != null) html += '<div class="k" style="margin-top:6px">신뢰도</div><div>' +
-        n.confidence + "</div>";
+      let html = "<div><b style='color:" + (NODE_COLOR[n.type] || "#fff") + "'>" + esc(n.type) + "</b></div>" +
+        "<div style='margin:4px 0 8px'>" + esc(n.label) + "</div>";
+      html += '<div class="k">id</div><div style="word-break:break-all">' + esc(n.id) + "</div>";
+      if (n.status) html += '<div class="k" style="margin-top:6px">상태</div><div>' + esc(n.status) + "</div>";
+      if (n.confidence != null) html += '<div class="k" style="margin-top:6px">신뢰도</div><div>' + n.confidence + "</div>";
       if (n.source_url) html += '<div class="k" style="margin-top:6px">원 소스</div>' +
-        "<a href='" + n.source_url + "' target='_blank' rel='noopener'>" + n.source_url + "</a>";
+        "<a href='" + esc(n.source_url) + "' target='_blank' rel='noopener'>" + esc(n.source_url) + "</a>";
       if (n.lat != null && n.lon != null) {
-        html += '<div class="k" style="margin-top:6px">위치</div><div>' +
-          n.lat.toFixed(3) + ", " + n.lon.toFixed(3) + "</div>";
-        html += "<div style='margin-top:8px'><button class='sg-open' onclick=\"highlightCite('" +
-          n.id + "')\">지도에서 보기</button></div>";
+        html += '<div class="k" style="margin-top:6px">위치</div><div>' + n.lat.toFixed(3) + ", " + n.lon.toFixed(3) + "</div>";
+        html += "<div style='margin-top:8px'><button class='sent-map' onclick=\"highlightCite('" +
+          esc(n.id).replace(/'/g, "\\'") + "')\">지도에서 보기</button></div>";
       }
       d.innerHTML = html;
     }
+    document.getElementById("sg-modal").addEventListener("click", (e) => { if (e.target.id === "sg-modal") closeSubgraph(); });
 
-    document.getElementById("sg-modal").addEventListener("click", (e) => {
-      if (e.target.id === "sg-modal") closeSubgraph();
-    });
-    renderQuickButtons();
+    // ════════════════════════════════════════════════════════════
+    // 레이아웃 토글 (접기/펼치기) + 지도 리사이즈
+    // ════════════════════════════════════════════════════════════
+    function invalidateSoon() { setTimeout(() => map.invalidateSize(), 200); }
+    function toggleRail(side) {
+      const body = document.getElementById("body");
+      const collapsed = body.classList.toggle(side === "left" ? "no-left" : "no-right");
+      // 버튼 on = 접힌 상태 표시
+      document.getElementById(side === "left" ? "tg-left" : "tg-right").classList.toggle("on", collapsed);
+      invalidateSoon();
+    }
+    window.toggleRail = toggleRail;
+    function toggleCopilot() {
+      const c = document.getElementById("copilot");
+      const min = c.classList.toggle("min");
+      document.getElementById("tg-cop").querySelector(".ic").textContent = min ? "▴" : "▾";
+      invalidateSoon();
+    }
+    window.toggleCopilot = toggleCopilot;
+    function toggleSec(id) { document.getElementById(id).classList.toggle("collapsed"); }
+    window.toggleSec = toggleSec;
 
-    // 이상징후 유형 범례 (P5 5종 색 매핑).
-    (function renderTypeLegend() {
-      const el = document.getElementById("type-legend");
-      if (!el) return;
-      el.innerHTML = Object.keys(TYPE_LABEL).map((t) =>
-        '<span class="tchip"><i style="background:' + TYPE_COLOR[t] + '"></i>' +
-        (TYPE_ICON[t] || "") + TYPE_LABEL[t] + "</span>").join("");
+    // ════════════════════════════════════════════════════════════
+    // 온보딩
+    // ════════════════════════════════════════════════════════════
+    function openOnboard() { document.getElementById("onboard").classList.add("open"); }
+    function closeOnboard() {
+      if (document.getElementById("ob-dismiss").checked) {
+        try { localStorage.setItem("skai_onboard_seen", "1"); } catch (e) {}
+      }
+      document.getElementById("onboard").classList.remove("open");
+    }
+    window.openOnboard = openOnboard;
+    window.closeOnboard = closeOnboard;
+    (function maybeOnboard() {
+      let seen = false;
+      try { seen = localStorage.getItem("skai_onboard_seen") === "1"; } catch (e) {}
+      // 딥링크(?q= / ?anom=)로 진입하면 온보딩 스킵(스크린샷·발표 재현)
+      const p = new URLSearchParams(location.search);
+      const deeplink = p.get("q") || p.get("anom");
+      if (!seen && !deeplink) openOnboard();
     })();
 
-    // 딥링크: ?q=질의 → 자동 질의, &sg=1 → 서브그래프 자동 오픈.
-    // 공유 가능한 질의 링크 + 헤드리스 스크린샷 재현용(실 기능이지 데모 전용 훅 아님).
+    // 유형 범례
+    (function renderTypeLegend() {
+      const el = document.getElementById("type-legend");
+      el.innerHTML = Object.keys(TYPE_LABEL).map((t) =>
+        '<span class="tchip"><i style="background:' + TYPE_COLOR[t] + '"></i>' + (TYPE_ICON[t] || "") + TYPE_LABEL[t] + "</span>").join("");
+    })();
+
+    // ════════════════════════════════════════════════════════════
+    // 부팅
+    // ════════════════════════════════════════════════════════════
+    renderQuickButtons();
+    refresh();
+    pollLive();
+    scheduleRefresh();
+
+    // 딥링크: ?q=질의 → 자동 질의, &sg=1 → 서브그래프 자동 오픈
     (async () => {
       const params = new URLSearchParams(location.search);
       const q = params.get("q");
@@ -954,9 +1425,6 @@
       await submitChat();
       if (params.get("sg") === "1") openSubgraph();
     })();
-
-    refresh();
-    setInterval(refresh, 30000); // 30초 자동 갱신
   </script>
 </body>
 </html>
