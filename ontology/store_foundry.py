@@ -101,6 +101,14 @@ ACTION_DELETE_ORBIT_PASS = "delete-orbit-pass"
 ACTION_CREATE_ANOMALY = "create-anomaly"
 ACTION_CONFIRM_ANOMALY = "confirm-anomaly"
 ACTION_DISMISS_ANOMALY = "dismiss-anomaly"
+# B2 staged human review (방법 B) — AIP 산출 explanation을 본 속성에 즉시 쓰지 않고
+# 제안(proposedExplanation)→사람 승인(explanation←proposed) 2단계로 분리. OSDK 0.11.0 실측:
+#   propose-explanation: params {anomaly(target), proposedExplanation, reviewStatus}
+#   approve-explanation: params {anomaly(target), proposedExplanation(opt)} — 규칙이 복사+approved
+#   reject-explanation : params {anomaly(target)} — 규칙이 reviewStatus=rejected
+ACTION_PROPOSE_EXPLANATION = "propose-explanation"
+ACTION_APPROVE_EXPLANATION = "approve-explanation"
+ACTION_REJECT_EXPLANATION = "reject-explanation"
 
 # create-*가 실세계 mention/근거 객체를 못 받을 때 required object 파라미터에 넣는 placeholder.
 # P7 §9-4·§10-6 실측: 존재하지 않는 ref도 present-only로 EXECUTE 통과(링크는 안 맺힘). 권위 링크는
@@ -1042,6 +1050,34 @@ class FoundryOntologyStore:
         elif status == "dismissed":
             self._apply(ACTION_DISMISS_ANOMALY, {"anomaly": anomaly_id})
 
+    # ── B2 staged human review (방법 B) — propose/approve/reject-explanation ──────
+    def propose_explanation(
+        self, anomaly_id: str, explanation: str, review_status: str = "pending"
+    ) -> None:
+        """AIP 산출 explanation을 **proposedExplanation**으로 제안(reviewStatus=pending).
+
+        본 explanation 속성은 건드리지 않는다(스테이징의 핵심). set_anomaly_status와 동일하게
+        스파인 동기(best-effort)만 담당 — HybridStore가 로컬 권위본을 반환한다.
+        OSDK 0.11.0 실측 파라미터명(camelCase Foundry api_name)을 그대로 쓴다.
+        """
+        params: dict = {"anomaly": anomaly_id, "proposedExplanation": explanation}
+        if review_status:
+            params["reviewStatus"] = review_status
+        self._apply(ACTION_PROPOSE_EXPLANATION, params)
+
+    def approve_explanation(self, anomaly_id: str) -> None:
+        """승인 — explanation←proposedExplanation 복사 + reviewStatus=approved(Foundry 규칙).
+
+        코드는 액션 apply만 하고, 복사·상태전이는 approve-explanation Modify 규칙이 수행한다.
+        proposedExplanation은 OSDK상 optional이라 target(anomaly)만 넘긴다(규칙이 객체 자신의
+        proposedExplanation을 읽어 복사 — E2E로 검증).
+        """
+        self._apply(ACTION_APPROVE_EXPLANATION, {"anomaly": anomaly_id})
+
+    def reject_explanation(self, anomaly_id: str) -> None:
+        """기각 — reviewStatus=rejected(Foundry 규칙). 본 explanation·proposed 불변."""
+        self._apply(ACTION_REJECT_EXPLANATION, {"anomaly": anomaly_id})
+
     def write_region(self, region: Region) -> None:
         # Region write는 로컬 유지: FK 타깃(regionId)은 데모 자산(KADIZ)으로 별도 시딩하고,
         # 앱의 Region 관리(지오펜스 폴리곤 등)는 로컬이 권위본. HybridStore가 로컬로 위임.
@@ -1195,6 +1231,37 @@ class HybridStore:
             _warn(
                 f"Foundry set_anomaly_status({status}) 실패(로컬 권위본은 성공): {e!r}"
             )
+        return result
+
+    # ── B2 staged human review (방법 B) ──────────────
+    def propose_explanation(
+        self, anomaly_id: str, explanation: str, review_status: str = "pending"
+    ) -> Anomaly:
+        # 로컬 = 권위본(proposed_explanation·review_status를 attrs에 미러, 본 explanation 불변).
+        # Foundry = propose-explanation 액션으로 스파인 동기(best-effort). set_anomaly_status와 동일.
+        result = self.local.propose_explanation(anomaly_id, explanation, review_status)
+        try:
+            self.foundry.propose_explanation(anomaly_id, explanation, review_status)
+        except Exception as e:
+            _warn(f"Foundry propose_explanation 실패(로컬 권위본은 성공): {e!r}")
+        return result
+
+    def approve_explanation(self, anomaly_id: str) -> Anomaly:
+        # 로컬 = 권위본(explanation←proposed 복사·review_status=approved). Foundry = 액션 동기.
+        result = self.local.approve_explanation(anomaly_id)
+        try:
+            self.foundry.approve_explanation(anomaly_id)
+        except Exception as e:
+            _warn(f"Foundry approve_explanation 실패(로컬 권위본은 성공): {e!r}")
+        return result
+
+    def reject_explanation(self, anomaly_id: str) -> Anomaly:
+        # 로컬 = 권위본(review_status=rejected). Foundry = 액션 동기. 본 explanation·proposed 불변.
+        result = self.local.reject_explanation(anomaly_id)
+        try:
+            self.foundry.reject_explanation(anomaly_id)
+        except Exception as e:
+            _warn(f"Foundry reject_explanation 실패(로컬 권위본은 성공): {e!r}")
         return result
 
     # ── 링크 ───────────────────────────────────────

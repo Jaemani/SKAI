@@ -10,6 +10,8 @@ store 인터페이스에만 의존 → Foundry 교체 시 무변경.
   GET  /api/anomalies              이상징후 + 근거(evidence) Observation + involves
   POST /api/anomalies/{id}/confirm status candidate→confirmed (사람 승인)
   POST /api/anomalies/{id}/dismiss status candidate→dismissed (사람 기각)
+  POST /api/anomalies/{id}/approve-explanation  제안 설명 승인(explanation←proposed, B2)
+  POST /api/anomalies/{id}/reject-explanation   제안 설명 기각(reviewStatus=rejected, B2)
   GET  /api/orbitpasses            위성 통과창(지상궤적·window·max_elev, P3)
   GET  /api/weather                지역 기상(공항별 최신, P3)
   GET  /api/news                   뉴스(저신뢰) + mentions 링크 (P3)
@@ -29,7 +31,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from anomaly.actions import confirm_anomaly, dismiss_anomaly
+from anomaly.actions import (
+    approve_explanation,
+    confirm_anomaly,
+    dismiss_anomaly,
+    reject_explanation,
+)
 from copilot.assessment import (
     _resolve_object,
     assess,
@@ -277,6 +284,9 @@ def _anomaly_to_dict(store, a: Anomaly) -> dict:
         "explanation": a.explanation,
         "explainer_backend": a.explainer_backend,
         "created_at": a.created_at,
+        # B2 staged review(방법 B): attrs에 미러된 제안·검토상태를 최상위 필드로도 노출(프론트 후속용).
+        "review_status": a.attrs.get("review_status"),
+        "proposed_explanation": a.attrs.get("proposed_explanation"),
         "attrs": a.attrs,
         "evidence": evidence,  # 근거 Observation (provenance, P2~P4 하위호환)
         "evidence_objects": evidence_objects,  # 타입 무관 근거(P5 위성 근접=OrbitPass)
@@ -309,6 +319,32 @@ def api_dismiss_anomaly(anomaly_id: str) -> dict:
     store = _store()
     try:
         a = dismiss_anomaly(store, anomaly_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Anomaly 없음: {anomaly_id}")
+    return _anomaly_to_dict(store, a)
+
+
+@app.post("/api/anomalies/{anomaly_id}/approve-explanation")
+def api_approve_explanation(anomaly_id: str) -> dict:
+    """분석가 승인 — 제안된 explanation을 본 속성에 확정(explanation←proposed·reviewStatus=approved).
+
+    B2 staged human review(방법 B): AIP 산출 설명은 제안(pending) 상태로만 스테이징되고, 이 승인
+    액션을 거쳐야 본 explanation에 반영된다 = AI 출력에도 human-on-the-loop.
+    """
+    store = _store()
+    try:
+        a = approve_explanation(store, anomaly_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Anomaly 없음: {anomaly_id}")
+    return _anomaly_to_dict(store, a)
+
+
+@app.post("/api/anomalies/{anomaly_id}/reject-explanation")
+def api_reject_explanation(anomaly_id: str) -> dict:
+    """분석가 기각 — reviewStatus=rejected. 제안된 explanation은 본 속성에 반영되지 않는다."""
+    store = _store()
+    try:
+        a = reject_explanation(store, anomaly_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Anomaly 없음: {anomaly_id}")
     return _anomaly_to_dict(store, a)

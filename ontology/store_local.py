@@ -664,6 +664,60 @@ class LocalOntologyStore:
         assert got is not None  # 방금 UPDATE 성공 → 반드시 존재
         return got
 
+    # ── B2 staged human review (방법 B) ──────────────
+    # Anomaly에 proposed_explanation·review_status는 별도 컬럼 없이 attrs(JSON)에 미러한다
+    # (스키마 마이그레이션 회피). 본 explanation 컬럼은 approve 전까지 불변 = 스테이징의 핵심.
+    def propose_explanation(
+        self, anomaly_id: str, explanation: str, review_status: str = "pending"
+    ) -> Anomaly:
+        """제안 — attrs.proposed_explanation·review_status 기록. 본 explanation 불변. 없으면 KeyError."""
+        a = self.get_anomaly(anomaly_id)
+        if a is None:
+            raise KeyError(f"Anomaly 없음: id={anomaly_id!r}")
+        a.attrs["proposed_explanation"] = explanation
+        a.attrs["review_status"] = review_status
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE anomaly SET attrs_json = ? WHERE id = ?",
+                (json.dumps(a.attrs, ensure_ascii=False), anomaly_id),
+            )
+        got = self.get_anomaly(anomaly_id)
+        assert got is not None
+        return got
+
+    def approve_explanation(self, anomaly_id: str) -> Anomaly:
+        """승인 — explanation←attrs.proposed_explanation 복사 + review_status=approved. 없으면 KeyError."""
+        a = self.get_anomaly(anomaly_id)
+        if a is None:
+            raise KeyError(f"Anomaly 없음: id={anomaly_id!r}")
+        proposed = a.attrs.get("proposed_explanation")
+        if proposed:
+            a.explanation = proposed
+        a.attrs["review_status"] = "approved"
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE anomaly SET explanation = ?, attrs_json = ? WHERE id = ?",
+                (a.explanation, json.dumps(a.attrs, ensure_ascii=False), anomaly_id),
+            )
+        got = self.get_anomaly(anomaly_id)
+        assert got is not None
+        return got
+
+    def reject_explanation(self, anomaly_id: str) -> Anomaly:
+        """기각 — review_status=rejected. 본 explanation·proposed 불변. 없으면 KeyError."""
+        a = self.get_anomaly(anomaly_id)
+        if a is None:
+            raise KeyError(f"Anomaly 없음: id={anomaly_id!r}")
+        a.attrs["review_status"] = "rejected"
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE anomaly SET attrs_json = ? WHERE id = ?",
+                (json.dumps(a.attrs, ensure_ascii=False), anomaly_id),
+            )
+        got = self.get_anomaly(anomaly_id)
+        assert got is not None
+        return got
+
     def query_evidence_ids(self, anomaly_id: str) -> list[str]:
         """Anomaly —evidenced_by→ Observation 링크의 대상 Observation id 목록."""
         with self._connect() as conn:

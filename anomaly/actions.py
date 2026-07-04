@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from typing import Optional
 
@@ -53,16 +54,32 @@ def create_anomaly(
 
     result = explainer.explain(candidate)
     o: Observation = candidate.observation
+    staged = _review_staged()
+
+    if staged:
+        # 스테이징(SKAI_REVIEW=staged, B2 방법 B): 구성된 explainer(예: AIP) 산출을 본
+        # explanation에 **즉시 쓰지 않는다**. 본 속성엔 결정적 template 베이스라인을 두어
+        # (항상 사용가능·재현성) 시스템을 기능 상태로 유지하고, explainer 산출은 아래
+        # propose_explanation으로 proposedExplanation에 제안(reviewStatus=pending) → 사람 승인 대기.
+        baseline = TemplateExplainer().explain(candidate)
+        main_explanation = baseline.explanation
+        main_backend = baseline.backend
+        main_confidence = baseline.confidence
+    else:
+        main_explanation = result.explanation
+        main_backend = result.backend
+        main_confidence = result.confidence
+
     anomaly = Anomaly(
         id=candidate.anomaly_id,
         type=candidate.type,
         ts=candidate.ts,
-        confidence=result.confidence,
+        confidence=main_confidence,
         status="candidate",
         lat=o.lat,
         lon=o.lon,
-        explanation=result.explanation,
-        explainer_backend=result.backend,
+        explanation=main_explanation,
+        explainer_backend=main_backend,
         created_at=int(created_at if created_at is not None else time.time()),
         attrs={
             "squawk": candidate.signal.get("squawk"),
@@ -77,6 +94,12 @@ def create_anomaly(
         evidence=[o.id],  # Anomaly —evidenced_by→ Observation
         involves=[candidate.aircraft_ref],  # Anomaly —involves→ Aircraft
     )
+    if staged:
+        # 구성된 explainer 산출을 제안 상태로 스테이징(본 explanation 불변). 반환 Anomaly에도
+        # 반영(review_status=pending·proposed_explanation)되게 갱신본을 받는다.
+        updated = store.propose_explanation(anomaly.id, result.explanation)
+        if updated is not None:
+            anomaly = updated
     return anomaly
 
 
@@ -88,6 +111,31 @@ def confirm_anomaly(store, anomaly_id: str) -> Anomaly:
 def dismiss_anomaly(store, anomaly_id: str) -> Anomaly:
     """분석가 기각 — status candidate→dismissed (영속)."""
     return store.set_anomaly_status(anomaly_id, "dismissed")
+
+
+# ── B2 staged human review (방법 B) ──────────────────────────────────────────────
+def _review_staged() -> bool:
+    """SKAI_REVIEW=staged면 explainer 산출 explanation을 즉시 적용하지 않고 제안→승인 2단계로
+    스테이징한다. 기본(미설정)은 즉시 적용 = 현행 동작 불변(데모 재현성 보존)."""
+    return os.environ.get("SKAI_REVIEW", "").strip().lower() == "staged"
+
+
+def propose_explanation(store, anomaly_id: str, explanation: str) -> Anomaly:
+    """explainer 산출 explanation을 proposedExplanation으로 제안(reviewStatus=pending).
+
+    본 explanation 속성은 건드리지 않는다(스테이징의 핵심 — 사람 승인 전엔 미적용).
+    """
+    return store.propose_explanation(anomaly_id, explanation)
+
+
+def approve_explanation(store, anomaly_id: str) -> Anomaly:
+    """분석가 승인 — explanation←proposedExplanation 복사 + reviewStatus=approved (human-on-the-loop)."""
+    return store.approve_explanation(anomaly_id)
+
+
+def reject_explanation(store, anomaly_id: str) -> Anomaly:
+    """분석가 기각 — reviewStatus=rejected. 본 explanation·proposedExplanation 불변."""
+    return store.reject_explanation(anomaly_id)
 
 
 def scan_and_create(
