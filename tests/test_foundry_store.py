@@ -8,9 +8,9 @@
 을 검증한다. foundry_sdk 없이(메인 .venv=3.14) 통과해야 한다.
 
 파라미터 매핑 단위: FoundryOntologyStore를 mock _pf로 생성해
-  - write_aircraft: newParameter=icao24(PK), newParameter1 없음
-  - write_observation: newParameter=obs.id(PK), aircraftIcao24=aircraft_ref(FK), optional None 생략
-를 직접 검증한다.
+  - write_aircraft: icao24=PK (E-4 리네임: 구 newParameter, §15)
+  - write_observation: obsId=PK, aircraftIcao24=aircraft_ref(FK), optional None 생략
+를 직접 검증한다. (edit-observation은 여전히 newParameter required — composed_of 경로에서 유지.)
 
 라이브(skip 마커): FOUNDRY_TOKEN·FOUNDRY_HOSTNAME + foundry_sdk 있을 때만.
   실 Foundry read-only(query_aircraft·counts)만 — 테스트 스위트가 Foundry에 쓰지 않게.
@@ -405,7 +405,7 @@ def _make_foundry_store_with_mock():
 
 
 def test_write_aircraft_uses_real_pk():
-    """write_aircraft: newParameter=aircraft.icao24(실 PK 바인딩), newParameter1 없음."""
+    """write_aircraft: icao24=aircraft.icao24(E-4 리네임 PK), newParameter1 없음."""
     store, captured = _make_foundry_store_with_mock()
     ac = Aircraft(icao24="abc123", callsign="TEST", registration="REG1")
 
@@ -423,7 +423,8 @@ def test_write_aircraft_uses_real_pk():
 
     assert len(calls) == 1
     params = calls[0]["parameters"]
-    assert params["newParameter"] == "abc123"  # 실 PK
+    assert params["icao24"] == "abc123"  # 실 PK (E-4 리네임)
+    assert "newParameter" not in params  # 리네임됨(§15)
     assert "newParameter1" not in params  # 제거됨(§7-6 수정 1)
     assert params["callsign"] == "TEST"
     assert params["isMilitary"] is False
@@ -442,7 +443,7 @@ def test_write_aircraft_dedup_no_double_call():
 
 
 def test_write_observation_params():
-    """write_observation: newParameter=obs.id(PK), aircraftIcao24=aircraft_ref(FK)."""
+    """write_observation: obsId=obs.id(E-4 리네임 PK), aircraftIcao24=aircraft_ref(FK)."""
     store, _ = _make_foundry_store_with_mock()
     calls: list[dict] = []
     store._apply = lambda action, params: (
@@ -454,7 +455,7 @@ def test_write_observation_params():
 
     assert len(calls) == 1
     params = calls[0]["params"]
-    assert params["newParameter"] == obs.id  # obsId PK 바인딩(§7-6 수정 2)
+    assert params["obsId"] == obs.id  # obsId PK (E-4 리네임, §15)
     assert (
         params["aircraftIcao24"] == "abc123"
     )  # FK → observed_as 자동 형성(§7-6 수정 2)
@@ -538,12 +539,12 @@ def _capture_store():
 
 
 def test_write_operator_params():
-    """create-operator: newParameter=operatorId(PK), name/kind/country 매핑."""
+    """create-operator: operatorId(E-4 리네임 PK), name/kind/country 매핑."""
     store, calls = _capture_store()
     store.write_operator(Operator(id="op-1", name="KAF", kind="airforce", country="KR"))
     p = calls[0]["params"]
     assert calls[0]["action"] == "create-operator"
-    assert p["newParameter"] == "op-1"
+    assert p["operatorId"] == "op-1"
     assert (p["name"], p["kind"], p["country"]) == ("KAF", "airforce", "KR")
 
 
@@ -555,7 +556,7 @@ def test_write_operator_none_country_placeholder():
 
 
 def test_write_satellite_params():
-    """create-satellite: newParameter=noradId(PK), objectType/operatorRef/tleEpoch 매핑."""
+    """create-satellite: noradId(E-4 리네임 PK), objectType/operatorRef/tleEpoch 매핑."""
     store, calls = _capture_store()
     store.write_satellite(
         Satellite(
@@ -568,7 +569,7 @@ def test_write_satellite_params():
     )
     p = calls[0]["params"]
     assert calls[0]["action"] == "create-satellite"
-    assert p["newParameter"] == "25544"
+    assert p["noradId"] == "25544"
     assert p["objectType"] == "PAYLOAD"
     assert p["operatorRef"] == "NASA"
     assert p["tleEpoch"] == "2026-07-04T00:00:00+00:00"
@@ -596,7 +597,7 @@ def test_write_orbitpass_fk_params():
     )
     p = calls[0]["params"]
     assert calls[0]["action"] == "create-orbit-pass"
-    assert p["newParameter"] == "pass-25544-100"
+    assert p["passId"] == "pass-25544-100"
     assert p["satelliteNoradId"] == "25544"  # FK → OrbitPass.satellite(of)
     assert p["regionId"] == "KADIZ"
     assert p["maxElevation"] == 45.0
@@ -618,7 +619,7 @@ def test_write_track_params():
     )
     p = calls[0]["params"]
     assert calls[0]["action"] == "create-track"
-    assert p["newParameter"] == "track-abc"
+    assert p["trackId"] == "track-abc"
     assert p["aircraftIcao24"] == "abc123"  # FK → Track.aircraft
     assert p["hasGap"] is True
     assert p["pathJson"] == "[[36.0, 124.0]]"
@@ -644,7 +645,7 @@ def test_write_weatherstate_params():
     store.write_weatherstate(ws)
     p = calls[0]["params"]
     assert calls[0]["action"] == "create-weather-state"
-    assert p["newParameter"] == "wx-RKSI-100"
+    assert p["weatherId"] == "wx-RKSI-100"
     assert p["regionId"] == "KADIZ"  # FK → WeatherState.region
     assert p["wind"] == "200/8"  # dir/speed 합성
     assert p["visibilitySm"] == 6.0
@@ -679,7 +680,7 @@ def test_write_weatherstate_provenance_missing_rejected():
 
 
 def test_write_newsevent_params_and_clamp():
-    """create-news-event: url←source_url, confidence 상한 clamp, mentions→object 파라미터."""
+    """create-news-event: newsId(E-4 PK), url←source_url, confidence clamp, mentions Optional(E-2.4)."""
     store, calls = _capture_store()
     news = NewsEvent(
         id="news-x",
@@ -694,11 +695,12 @@ def test_write_newsevent_params_and_clamp():
     store.write_newsevent(news, mentions=[("Region", "KADIZ")])
     p = calls[0]["params"]
     assert calls[0]["action"] == "create-news-event"
-    assert p["newParameter"] == "news-x"
+    assert p["newsId"] == "news-x"  # E-4 리네임 PK
     assert p["url"] == "https://a.example/story"  # Foundry url = source_url
     assert p["confidence"] == 0.4  # NEWS_MAX_CONFIDENCE clamp
     assert p["regions"] == "KADIZ"  # mention → regions 파라미터
-    assert p["aircraft"] == "none" and p["operators"] == "none"  # 없으면 placeholder
+    # E-2.4(§15): mention 파라미터 Optional화 → 실 ref 없으면 생략(구 "none" placeholder 제거).
+    assert "aircraft" not in p and "operators" not in p
     assert p["entitiesJson"] == '["KADIZ"]'
 
 
@@ -774,19 +776,38 @@ def _raise(exc_name="ApplyActionFailedError", msg="INVALID_ARGUMENT ApplyActionF
 
 
 def test_write_anomaly_params_mapping():
-    """create-anomaly: observations=첫 근거(evidenced_by), newParameter=anomalyId, 스칼라·aircraft."""
+    """create-anomaly: observations=첫 근거, anomalyId(E-4 PK), correlatedWith placeholder, 스칼라·aircraft."""
     store, calls = _capture_store()
     store.write_anomaly(_anomaly(), evidence=["obs-a", "obs-b"], involves=["847114"])
     assert len(calls) == 1
     p = calls[0]["params"]
     assert calls[0]["action"] == "create-anomaly"
     assert p["observations"] == "obs-a"  # 첫 근거만 Foundry(단일 파라미터)
-    assert p["newParameter"] == "anomaly-1"  # anomalyId PK
+    assert p["anomalyId"] == "anomaly-1"  # E-4 리네임 PK (구 newParameter)
+    assert "newParameter" not in p  # 리네임됨(§15)
+    assert p["correlatedWith"] == "none"  # required(E-2.3) → present-only placeholder
     assert p["confidence"] == 0.9
     assert p["status"] == "candidate"
     assert p["explanation"] == "obs-grounded"
     assert p["aircraft"] == "847114"  # involves 첫 Aircraft
     assert p["type"] == "emergency_squawk"
+
+
+def test_write_anomaly_e3_attrs_wired():
+    """E-3(§15): createdAt·explainerBackend 값이 있으면 create-anomaly 파라미터에 배선."""
+    store, calls = _capture_store()
+    store.write_anomaly(
+        _anomaly(created_at=1_700_000_500, explainer_backend="claude_cli"),
+        evidence=["obs-a"],
+    )
+    p = calls[0]["params"]
+    assert p["explainerBackend"] == "claude_cli"
+    assert p["createdAt"].startswith("2023")  # unix → ISO
+    # 값이 없으면(기본 _anomaly) 생략됨 — 회귀 방지
+    store2, calls2 = _capture_store()
+    store2.write_anomaly(_anomaly(), evidence=["obs-a"])
+    assert "explainerBackend" not in calls2[0]["params"]
+    assert "createdAt" not in calls2[0]["params"]
 
 
 def test_write_anomaly_empty_evidence_rejected_foundry():

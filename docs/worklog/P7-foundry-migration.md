@@ -772,3 +772,128 @@ demo.md 스텝 ⑥을 "준비 완료·크리덴셜 대기" 문구에서 **실 Fo
 2. 실 hex 인제스트 누적(리허설로 Foundry Aircraft 6→15·Observation 3→17): 실 ADS-B라 보존했으나, 완전
    pristine 복원을 원하면 최근 ts 관측 삭제 필요(데모엔 populated Object Explorer가 오히려 유리 — 미실행).
 3. create-anomaly 무해 ApplyActionFailed·over/within 링크 잔존(§12-7·§13-5, 데모 필수 아님).
+
+---
+
+## 15. 0.7.0 재검증·동기화 (E부 반영 후, 2026-07-04, opus 서브에이전트)
+
+사용자가 **create-anomaly 규칙 수정**(§12 가짜 에러 원인 = 링크가 신규 객체가 아니라 `anomalies`
+입력 파라미터에 연결되던 것) + **E부 반영**(E-1~E-4 대부분) + **OSDK 0.7.0 재발행**을 마친 뒤 전수
+실측 재검증 + **코드(파라미터명)를 실측에 동기화**. 저수준 `foundry_sdk` 1.97.0 introspection +
+OSDK 0.7.0 강제 재설치(--no-cache-dir, pip 로그 토큰 스크럽) + 라이브 왕복. 스키마 변경 없음.
+**Foundry 오염 0**(모든 생성분 delete, before==after: Aircraft 15·Observation 17·Region 1[KADIZ] 유지).
+
+**검증 산출물**: `scripts/p7_full_introspect.py`(재사용, 11객체·전링크·36액션), `scripts/p7_e_reverify.py`
+(신규, create-anomaly 클린 실행 raw-SDK 판정), `scripts/p7_e_store_validate.py`(신규, **실 store 코드
+경로** 타입 왕복·anomaly 클린 생성·confirm·정리).
+
+### 15-0. 종합 판정 — **★create-anomaly 클린 실행 해소 / E-4 리네임 전면 완료 / 코드 동기화 완료**
+
+- **create-anomaly 클린 실행 = 예.** 사용자 수정으로 EXECUTE가 **ApplyActionFailed 없이 깔끔 성공**
+  (err=None). §12~§13의 "무해 ApplyActionFailed + 코드 흡수" 국면 종료. 흡수 경로는 방어용으로 유지하되
+  라이브에서 **미발동 확인**(store 경로 stderr 감시: "무해 ApplyActionFailed 흡수" 경고 0회).
+- **E-4 리네임 = 전면(create 11종 전부).** `newParameter` → 실 PK명(icao24·obsId·anomalyId·operatorId·
+  noradId·passId·trackId·weatherId·newsId·assessmentId + region은 `Id`). **부분 리네임 아님** →
+  store_foundry 16 호출 중 10 create 호출을 실 PK명으로 일괄 동기. **단 `edit-observation`만 리네임
+  제외** — 유일하게 `newParameter`(required) 잔존 → composed_of 경로(`_set_observation_track`)는 그대로 유지.
+- **E-2/E-3 대부분 반영.** over·within 링크 형성(E-2.1·E-2.2), correlatedWith 파라미터 추가(E-2.3, 단
+  **required**), mentions Optional화(E-2.4), 6개 신규 속성 전부 객체에 존재(E-3). 단 **채울 액션
+  파라미터가 없는 신규 속성 4개**(station·groundTrackJson·sentencesJson·attrsJson)는 여전히 미배선.
+
+### 15-1. OSDK 0.7.0 포함범위 (강제 재설치·토큰 스크럽)
+
+- **Object 클래스 11개**(변동 없음).
+- **Action 36개**: create×11·edit×11·delete×11·confirm-anomaly·dismiss-anomaly·**set-region-alert-level**.
+  ✅ **set-region-alert-level 포함 확정**(0.5.0·0.6.0 **연속 누락 해소** — E-5 "발행 화면 직접 체크" 반영).
+  live 스키마와 정합(editrack은 E-1.1로 삭제됨 → live·OSDK 모두 edit-track만).
+
+### 15-2. E-4 리네임 현황 (create-* PK 파라미터 실측)
+
+| create 액션 | 구 PK 파라미터 | **실측 PK 파라미터** | store 동기 |
+|---|---|---|---|
+| create-aircraft | newParameter | **icao24** | ✓ |
+| create-observation | newParameter | **obsId** | ✓ |
+| create-anomaly | newParameter | **anomalyId** | ✓ |
+| create-operator | newParameter | **operatorId** | ✓ |
+| create-satellite | newParameter | **noradId** | ✓ |
+| create-orbit-pass | newParameter | **passId** | ✓ |
+| create-track | newParameter | **trackId** | ✓ |
+| create-weather-state | newParameter | **weatherId** | ✓ |
+| create-news-event | newParameter | **newsId** | ✓ |
+| create-situation-assessment | newParameter | **assessmentId** | ✓ |
+| create-region | newParameter | **Id**(대문자 — 미배선, write_region=로컬) | n/a |
+| **edit-observation** | newParameter | **newParameter (잔존!)** | 유지(리네임 금지) |
+
+→ **전면 리네임**(부분 아님) → store 파손 없음. edit-observation만 예외라 composed_of 경로는 newParameter 유지.
+잔여: create-region PK는 소문자 `id`가 아니라 대문자 `Id`(write_region은 로컬 권위본이라 코드 무영향).
+
+### 15-3. E-2 그래프 / E-3 속성 반영 현황
+
+**E-2 (그래프):**
+| 항목 | 반영 | 실측 |
+|---|---|---|
+| E-2.1 over(OrbitPass→Region) | **반영** | `OrbitPass.region`(FK=regionId) 링크 형성 → 라이브 traverse=[KADIZ] ✓. write_orbitpass.regionId가 이제 그래프 조인 |
+| E-2.2 within(Observation→Region) | **부분** | `Observation.region`(FK) 링크 + create/edit-observation.regionId 파라미터 **둘 다 생김**(채움 가능). 단 Observation **모델에 region_ref 필드 없음** → 코드 배선은 지오펜스 판정 로직 필요(미배선, 잔여) |
+| E-2.3 correlatedWith(Anomaly→Anomaly) | **반영(단 required)** | create-anomaly에 `correlatedWith`(object) 추가 — **required=True**(E-2.3 "Optional" 의도와 상이). 실 ref 주면 correlatedWithAnomalies 엣지 형성 ✓, placeholder("none")면 엣지 미형성(present-only). 코드는 placeholder로 required 충족(다건 correlated_with는 로컬 권위본) |
+| E-2.4 mentions Optional화 | **반영** | create-news-event.aircraft·operators·regions 전부 **Optional 강등** 확인 → 코드가 실 ref 없으면 파라미터 생략(구 "none" placeholder 제거) |
+
+**E-3 (속성):** 6개 신규 속성 **전부 객체에 존재**(station·groundTrackJson·sentencesJson·createdAt·
+explainerBackend·attrsJson). 단 **create 액션에 채울 파라미터가 있는 것은 Anomaly의 createdAt·
+explainerBackend뿐** → 이 둘만 write_anomaly에 **배선**(라이브 read-back 확인). 나머지 4개(station·
+groundTrackJson·sentencesJson·attrsJson)는 해당 create 액션에 파라미터가 없어 **여전히 미배선** →
+station=weatherId PK 복원·ground_track=로컬 폴백·assessment 문장=로컬 권위본·obs.attrs=미저장 유지.
+
+### 15-4. ★★ create-anomaly 클린 실행 판정 (raw-SDK `p7_e_reverify.py` + store `p7_e_store_validate.py`)
+
+| 검증 | 결과 |
+|---|---|
+| evidence 없이(observations 생략) → 거부? | **INVALID (거부 유지)** — provenance 강제 ✓ |
+| observations + correlatedWith 포함 EXECUTE → **ApplyActionFailed?** | **아니오 (깔끔 성공, err=None)** ★ |
+| evidenced_by(→Observation) traverse | **OK** — `Anomaly.observations→[obs]` 양방향 |
+| involves(→Aircraft) traverse | **OK** — `Anomaly.aircraft→[ac]` |
+| correlatedWith 실 ref → 엣지 | **OK** — `Anomaly.correlatedWithAnomalies→[ref]` 형성 |
+| correlatedWith placeholder("none") → 엣지 | **빈([]) = 정상**(present-only, EXECUTE 통과) |
+| optional(newsEvents·orbitPasses·aircraft) 생략 | **가능** ✓ |
+| **correlatedWith 생략** | **INVALID (required)** — E-2.3 "Optional" 의도와 다름, placeholder 필수 |
+| confirm-anomaly 전이 | **OK** — candidate→confirmed |
+| **store 경로 §12 흡수 경고 발동?** | **아니오 (클린 실행)** — 흡수 방어 코드 미발동 확인 |
+| Foundry 오염 | **0** — 전 생성분 delete, delta 0, KADIZ 유지 |
+
+### 15-5. store_foundry.py 동기화 결과
+
+| 함수 | 변경 |
+|---|---|
+| write_aircraft/observation/operator/satellite/orbitpass/track/weatherstate/newsevent/assessment | PK 파라미터 `newParameter` → 실 PK명(icao24·obsId·operatorId·noradId·passId·trackId·weatherId·newsId·assessmentId) |
+| write_anomaly | `newParameter`→`anomalyId` + **`correlatedWith`=placeholder(required 충족)** + **E-3 `createdAt`·`explainerBackend` 배선**(값 있을 때) |
+| write_newsevent | mention 파라미터(aircraft/operators/regions) **Optional화** — 실 ref 없으면 생략(placeholder 제거) |
+| write_orbitpass | over 코멘트 갱신(regionId=FK→over, E-2.1 형성) |
+| `_set_observation_track`(edit-observation) | **무변경** — edit-observation은 리네임 제외라 `newParameter` 유지(경고 코멘트 추가) |
+| 에러 흡수(`_create_anomaly_absorbing`) | **유지**(제거 안 함) — 방어용, 정상 경로 미발동. 도크스트링에 클린 실행 반영 |
+| 모듈 도크스트링·잔여 이슈 목록 | §15 실측으로 갱신(E-4 완료·E-3 미배선 4종·set-alert 발행 해소) |
+
+**테스트**: FakeFoundry/mock 파라미터 매핑 단위 전부 실 PK명으로 동기, `test_write_anomaly_e3_attrs_wired`
+신규 추가. **전체 pytest: 179 passed, 2 skipped**(라이브 skip). 회귀 0(§13의 178 → +1 E-3 테스트).
+
+### 15-6. 남은 갭
+
+**A. 사용자 UI (Ontology Manager — 코드로 불가, 데모 필수 아님):**
+1. **correlatedWith Optional화**(E-2.3 의도) — 현재 required라 상관관계 없는 anomaly도 placeholder 강제.
+   Optional이면 코드가 placeholder를 안 보내도 됨(마찰 감소). 단 현행 placeholder로도 클린 동작.
+2. **신규 속성 채움 파라미터 부재** — create-weather-state.station·create-orbit-pass.groundTrackJson·
+   create-situation-assessment.sentencesJson·create-observation.attrsJson **파라미터 추가**해야 코드의
+   dual/폴백(PK 복원·로컬 권위본) 제거 가능. 속성은 있으나 채울 수단이 없음.
+3. **within 채움 배선** — create/edit-observation.regionId 파라미터·Observation.region 링크 준비됐으나
+   Observation 모델에 region_ref 없음 → 지오펜스 진입 판정 로직 필요(코드측, 스키마 아님).
+4. create-region PK가 `Id`(대문자) — write_region이 로컬이라 무영향이나 컨벤션 불일치.
+
+**B. 코드측 (선택):**
+1. within 배선 시 Observation 모델에 region_ref 추가 + 지오펜스 판정(A-3 선행).
+2. §12 에러 흡수(`_create_anomaly_absorbing`)는 클린 실행 확인 후에도 방어용 유지 — 회귀 재발 시 경고로 감지.
+
+**핵심 3줄 요약**: ⓐ **★create-anomaly 클린 실행 해소** — 사용자가 가짜 에러 원인(링크가 `anomalies`
+입력 파라미터에 연결)을 고쳐 EXECUTE가 err 없이 성공, evidenced_by/involves/correlatedWith 엣지 형성,
+evidence 없으면 거부. §12 흡수 코드는 방어용 유지(라이브 미발동 확인). ⓑ **E-4 전면 리네임 + 코드
+동기화 완료** — 11 create 액션 실 PK명, edit-observation만 newParameter 잔존(유지). E-3 createdAt·
+explainerBackend 배선, correlatedWith placeholder·mentions Optional화 반영. ⓒ OSDK 0.7.0에 set-region-
+alert-level 포함(발행 갭 해소), pytest 179 passed, Foundry 순증 0. 잔여: correlatedWith required·신규
+속성 4종 채움 파라미터 부재·within 지오펜스 배선(전부 데모 필수 아님).
