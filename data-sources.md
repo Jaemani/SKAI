@@ -41,6 +41,15 @@
   - **한계(정직)**: 커뮤니티 DB라 오탐·미탐 존재(실측 스냅샷에 민간 Piper `N342TA`가 dbFlags=1로 섞여 있었음 = 오탐). 그래서 confidence ≤0.65(저신뢰). 트랜스폰더 OFF 군용기는 여전히 안 보임 → dropout(부재) 경로 담당(이중 경로).
   - **Attribution**: 데이터 제공 [adsb.fi](https://adsb.fi) — 인용 요건 준수(UI 크레딧 표기 필요).
 
+#### 사용 확대 — 항적 대체 소스 (2026-07-05, OpenSky 크레딧 소진 대응)
+- **adsb.fi 반경 질의 채택** — OpenSky 익명 크레딧 소진(429) 시 라이브 항적을 잇는 **대체/공존 track 소스**. `SKAI_POLL_SOURCES`에 `adsbfi` 포함으로 켠다(기본 미포함, opensky와 병렬 base 사이클). 같은 소스·ToS·1 req/s. 코드는 `connectors/adsbfi_tracks.py`.
+  - **엔드포인트**: `GET .../v2/lat/{lat}/lon/{lon}/dist/{dist}` — 반경 `{dist}`**해리(nm)** 내 항적. **dist 상한 250nm**(실측: 250→HTTP 200, 300→HTTP 400).
+  - **실측(2026-07-05)**: 응답 구조가 `/v2/hex`·`/v2/mil`과 **다름** — top 배열 키 `aircraft`(≠`ac`), count 키 `resultCount`(≠`total`). entry 실측 필드: `hex, flight, lat, lon, alt_baro, gs, track, squawk, seen, t, r, dst, baro_rate, type, category`. `alt_baro`는 정수(**피트**) 또는 문자열 `"ground"`. `gs`는 **노트**, `seen`은 마지막 메시지 이후 경과 초. 라이브 1회 실검(중심 35.5,127 dist 250) → KADIZ 부근 **81기** 수신.
+  - **단위 변환(필수)**: Observation 계약 = OpenSky 단위(alt=m·velocity=m/s)라, `alt_baro`(ft)→m(×0.3048)·`gs`(kt)→m/s(×0.514444)·`baro_rate`(ft/min)→m/s로 변환해 write. 안 하면 급기동 룰 임계가 소스별로 어긋남. ts는 `seen` 기반 보정(fetched_at − seen)으로 OpenSky last_contact와 같은 관측시각 의미.
+  - **커버리지(정직)**: KADIZ bbox(lat 32~39, lon 122~132) 코너는 중심에서 ≈322nm > 250nm → 1원으로 못 덮음. **2점 분할**(서 35.5,124.5 · 동 35.5,129.5, 각 250nm)로 bbox를 덮음(코너 여유 ≈7nm, 사이클당 2호출·간격 1.05s). 실제 저해상 한계는 질의 기하가 아니라 **커뮤니티 수신기 커버리지**(서해 너머 중국 방향 희소). OpenSky 대비 과거 window 조회 불가·필드 셋 차이는 있으나 항적 자체는 동등 수준.
+  - **공존·dedup**: 같은 icao24는 기존 dedup/custody가 흡수 → opensky와 동시 폴링 가능. 2원 겹침 구역의 동일(icao24, ts) 관측은 자연 dedup(INSERT OR IGNORE).
+  - **Attribution**: 데이터 제공 [adsb.fi](https://adsb.fi) — 인용 요건 준수(기존 crosscheck 크레딧이 같은 소스라 커버되나 항적 용도 확대 반영 권장).
+
 ## 2. 위성 궤도 (Satellite Orbits)
 
 ### Celestrak — 1순위

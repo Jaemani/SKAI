@@ -13,13 +13,28 @@
 | 영상 URL | (선택 — 미제출) |
 | 스크린샷 | `docs/submission/0N_*.png` 최대 8장 업로드 |
 
-## 데모 URL 운영 주의 (터널)
+## 데모 URL 운영 (터널 + 라이브 모드)
 
-- cloudflared quick tunnel → **발표·심사 동안 이 맥북이 켜져 있고 아래 두 프로세스가 살아 있어야 함**:
-  - replay 서버: `scripts/demo.sh replay` (localhost:8000)
-  - 터널: `cloudflared tunnel --url http://localhost:8000` (로그: `data/cloudflared.log`)
-  - 잠자기 방지: `caffeinate -dims` 실행 중
-- **터널 프로세스가 죽으면 URL이 바뀐다**(재기동 시 새 랜덤 URL) — 제출 후 터널은 절대 재시작하지 말 것. 서버(demo.sh)는 죽어도 재기동하면 같은 URL로 복구됨(터널이 :8000을 가리키므로).
-- 검증 완료: 외부에서 index 200, `POST /api/assess` 질의① 정상 응답 (2026-07-05).
-- 심사위원이 confirm/dismiss를 누르면 상태가 공유 DB에 반영됨(재기동 시 초기화) — 데모 성격상 허용.
-- 복구 절차(서버만 죽었을 때): `scripts/demo.sh replay` 한 번. (터널·URL 불변)
+**현재 운영 구성 (2026-07-05 저녁 확정) — 라이브 모드, 실항적 ~116기:**
+
+```bash
+SKAI_POLL_SOURCES=adsbfi,gdelt,metar,celestrak SKAI_CROSSCHECK=off \
+METAR_ICAOS="RKSI,RKJB,RKPC,RKPK,RKTU" SKAI_POLL_INTERVAL=60 \
+SKAI_COPILOT_LLM=template scripts/demo.sh live
+```
+
+- **항적 = adsb.fi**(OpenSky 익명 크레딧 소진·UTC 자정 리셋 → 대체 배선). KADIZ 2점 반경질의, 사이클당 2호출.
+- **SKAI_CROSSCHECK=off인 이유(원칙)**: 항적 소스가 adsb.fi인 동안 교차확인도 adsb.fi면 동어반복(같은 네트워크) → dropout은 저신뢰(0.42) 후보로만. OpenSky 복귀 후 켜면 진짜 2소스 교차가 됨.
+- 기상 5곳(인천·무안·제주·김해·청주), 코파일럿 서술 template(무인 URL 안정·쿼터 보호).
+- 군용 시나리오 3건은 DB에 주입돼 있음(재기동해도 유지 — 재주입 금지, 중복 누적됨).
+
+**불변 규칙**: 터널 프로세스(cloudflared, 로그 `data/cloudflared.log`)가 죽으면 URL이 바뀜 — **절대 재시작 금지**. 서버는 죽어도 위 커맨드로 재기동하면 같은 URL 복구. 감시 루프가 30초마다 자동 재기동 중. caffeinate 가동 중 — **맥북 뚜껑 열어둘 것**(심사위원이 밤에 열람 가능).
+
+## 발표 당일(D-day 오전) 체크리스트
+
+1. **09:00 KST(UTC 자정) OpenSky 크레딧 리셋** 후 원하면 항적 이중화 + 교차확인 복원:
+   `SKAI_POLL_SOURCES=opensky,adsbfi,gdelt,metar,celestrak SKAI_CROSSCHECK=live ...` 로 재기동 (URL 불변).
+2. 공개 URL 열어 항적·기상 5곳·군용 3건([합성] 배지)·뉴스 확인.
+3. 무대 시연은 별도 로컬로: 결정적 재현이 필요하면 `demo.sh replay`(다른 포트 or 터널 서버 그대로 두고 로컬 브라우저), LLM 서술 시연은 `SKAI_COPILOT_LLM=claude`.
+4. Foundry 스텝 ⑥: 사전 로그인 + `scripts/demo_foundry.sh` 리허설 1회 (demo.md §1 ⑥).
+5. 리허설 딥링크 3개(demo.md §0) 클릭 확인.

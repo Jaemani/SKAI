@@ -39,7 +39,15 @@ from anomaly.actions import scan_and_create_all
 from anomaly.crosscheck import CrossCheckSource
 from anomaly.explainer import get_explainer
 from anomaly.mil_enrich import MilEnrichmentSource
-from connectors import celestrak, crosscheck_live, gdelt, metar, mil_enrich_live, rss
+from connectors import (
+    adsbfi_tracks,
+    celestrak,
+    crosscheck_live,
+    gdelt,
+    metar,
+    mil_enrich_live,
+    rss,
+)
 from ontology import mapping
 from ontology.custody import rebuild_tracks
 from ontology.model import KADIZ_BBOX, KADIZ_REGION
@@ -140,13 +148,22 @@ def ingest_cycle(
     return n_obs, len(icaos), n_anom
 
 
+# base 사이클 항적 소스(매 사이클 fetch, due 스케줄 아님). 하나 이상 있어야 "순수 뉴스만
+# 폴링"(비의도)을 막는다. opensky 크레딧 소진 시 adsbfi 단독으로도 항적 base가 성립한다.
+TRACK_SOURCES = ("opensky", "adsbfi")
+
+
 def resolve_sources(sources) -> list[str]:
     """폴링 소스 리스트 정규화. None → OpenSky-only(하위호환·기존 테스트 불변).
 
-    다중소스는 호출측(main)이 SKAI_POLL_SOURCES 기본값으로 명시 전달한다. opensky는 항상
-    선두(항적은 base 사이클). 알 수 없는 이름은 무시(오타·미지원 소스 방어).
+    다중소스는 호출측(main)이 SKAI_POLL_SOURCES 기본값으로 명시 전달한다. 항적 base 소스
+    (opensky/adsbfi)가 하나도 없으면 opensky를 선두 보장(순수 뉴스만 폴링 방지) — 단 adsbfi
+    등 다른 track 소스가 명시됐으면 그것이 base를 담당하므로 opensky를 강제하지 않는다
+    (OpenSky 크레딧 소진 시 adsbfi 단독 운용). 알 수 없는 이름은 무시(오타·미지원 방어).
     """
-    known = {"opensky", *SOURCE_INTERVALS.keys()}
+    # opensky·adsbfi는 base 사이클 track 소스(due 스케줄 아님) → known에 명시.
+    # 나머지(gdelt·metar·celestrak·…)는 SOURCE_INTERVALS의 due 스케줄 소스.
+    known = {*TRACK_SOURCES, *SOURCE_INTERVALS.keys()}
     if sources is None:
         return ["opensky"]
     out: list[str] = []
@@ -154,8 +171,9 @@ def resolve_sources(sources) -> list[str]:
         s = s.strip().lower()
         if s and s in known and s not in out:
             out.append(s)
-    # 항적은 항상 base 사이클로 돈다 — 명시 안 됐어도 선두 보장(순수 뉴스만 폴링은 비의도).
-    if "opensky" not in out:
+    # 항적 base 소스가 하나도 없을 때만 opensky를 선두 보장. adsbfi 등이 명시됐으면 유지
+    # (기존 동작 불변: opensky만/뉴스만 명시하던 config는 여전히 opensky가 선두에 붙는다).
+    if not any(s in TRACK_SOURCES for s in out):
         out.insert(0, "opensky")
     return out
 
@@ -292,6 +310,31 @@ def run_poller(
                     print(f"[cycle {cycle}] opensky 오류(격리): {e!r}")
             else:
                 status = "ok"
+            # ── 항적(adsb.fi): OpenSky 크레딧 소진 시 대체/공존 track 소스(매 사이클) ──
+            # opensky와 병렬 base 경로. 같은 icao24는 dedup/custody가 흡수(공존 가능).
+            # 실패는 격리 — adsb.fi가 죽어도 opensky·옆 소스·루프는 지속(로깅만).
+            if "adsbfi" in sources:
+                try:
+                    a_obs, a_ac, a_anom = adsbfi_tracks.ingest_cycle(
+                        store, client, crosscheck=crosscheck, mil_enrich=mil_enrich
+                    )
+                    n_obs += a_obs
+                    n_ac += a_ac
+                    n_anom += a_anom
+                    last_poll["adsbfi"] = poll_ts
+                    last_status["adsbfi"] = "ok"
+                    # opensky 없이 adsbfi가 단독 track 소스면 사이클 상태를 adsbfi가 반영.
+                    if "opensky" not in sources:
+                        status = "ok"
+                    print(
+                        f"[cycle {cycle}] adsbfi obs={a_obs} 항공기={a_ac} "
+                        f"신규Anomaly={a_anom} 누적={store.counts()}"
+                    )
+                except Exception as e:  # 사이클 실패는 로깅만, 다음 사이클 진행
+                    last_status["adsbfi"] = "error"
+                    if "opensky" not in sources:
+                        status = "error"
+                    print(f"[cycle {cycle}] adsbfi 오류(격리): {e!r}")
             # ── 보조 소스(뉴스·기상·위성·선택 SM): 주기 도래분만, 실패는 개별 격리 ──
             for src in due_sources(last_poll, poll_ts, SOURCE_INTERVALS, sources):
                 try:
