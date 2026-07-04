@@ -1,0 +1,55 @@
+[assessment] claude 서술 다듬기 실패 → 원문 유지: TimeoutExpired(['claude', '-p', "너는 공중 ISR 상황분석 보조다. 아래 번호 매긴 문장들의 **서술만** 자연스러운 한국어로 다듬어라. 규칙: (1) 사실·수치·고유명사·시각을 절대 바꾸지 마라. (2) 문장을 추가/삭제/병합하지 마라 — 입력과 정확히 같은 개수의 줄을 같은 번호로 출력하라. (3) 근거·신뢰도 언급을 지어내지 마라. 머리말·마크다운 없이 번호 줄만.\n\n1. 최근 30분(지금) 한국 방공식별구역 (KADIZ)에서 이상징후 2건·항적 1대를 확인했습니다.\n2. 위성 SYN-RECON-7(NORAD 90007)이 관심지역 상공을 최대앙각 82°로 근접 통과 — 상태 미검토, 신뢰도 0.40(정황).\n3. [합성] 항공기 SHADOW7의 ADS-B 신호가 민감구역 서해 작전구역 (데모 OpArea)에서 끊겼습니다(dropout, 교차 확인) — 상태 미검토, 신뢰도 0.72, 근거 관측 1건.\n4. 이상징후 anomaly-satellite_proximity-90007-2971666(13:43 UTC)는 correlated_with로 관심지역 상공 위성 통과 1건과 시공간 상관: SYN-RECON-7(NORAD 90007, 13:43~13:46 UTC, 최대앙각 82°) — 확증 아님, 교차검증 요망.\n5. 이상징후 anomaly-satellite_proximity-90007-2971666는 같은 시공간 창에서 OSINT 뉴스 1건과 correlated_with로 연결됩니다(은닉 정황): '관측통 '서해 상공서 미식별 항적 일시 소실' 보도 — KADIZ 긴장' — 저신뢰, 확증 아님.\n6. 이상징후 anomaly-satellite_proximity-90007-2971666는 다른 이상징후 1건과 시공간 상관(correlated_with) — 교차소스 정황 클러스터.\n7. 이상징후 SHADOW7(13:41 UTC)는 correlated_with로 관심지역 상공 위성 통과 1건과 시공간 상관: SYN-RECON-7(NORAD 90007, 13:43~13:46 UTC, 최대앙각 82°) — 확증 아님, 교차검증 요망.\n8. 이상징후 SHADOW7는 같은 시공간 창에서 OSINT 뉴스 1건과 correlated_with로 연결됩니다(은닉 정황): '관측통 '서해 상공서 미식별 항적 일시 소실' 보도 — KADIZ 긴장' — 저신뢰, 확증 아님.\n9. 이상징후 SHADOW7는 다른 이상징후 1건과 시공간 상관(correlated_with) — 교차소스 정황 클러스터.\n10. 관심지역 기상은 RKSI MVFR · 실링 1200ft · 시정 4.0sm — ISR 임무 가용성 참고.\n11. OSINT(저신뢰 ≤0.4) 1건이 한국 방공식별구역 (KADIZ)를 언급 — 예: '관측통 '서해 상공서 미식별 항적 일시 소실' 보도 — KADIZ 긴장'. 확증 아님, 하드 소스로 교차검증 요망."], 40)
+# P5 평가 결과 (생성 2026-07-03 17:48 UTC)
+
+고정 now 앵커 1783000000 · 시나리오 12건(격리 임시 DB)
+
+## 유형별 precision / recall
+
+| 유형 | TP | FP | FN | Precision | Recall | F1 |
+|---|---:|---:|---:|---:|---:|---:|
+| 비상 스쿽 | 1 | 0 | 0 | 1.00 | 1.00 | 1.00 |
+| ADS-B dropout | 3 | 0 | 0 | 1.00 | 1.00 | 1.00 |
+| 로이터링 | 1 | 0 | 0 | 1.00 | 1.00 | 1.00 |
+| 군용기 접근 | 2 | 0 | 0 | 1.00 | 1.00 | 1.00 |
+| 위성 근접 | 2 | 0 | 0 | 1.00 | 1.00 | 1.00 |
+| **전체(micro)** | 9 | 0 | 0 | 1.00 | 1.00 | — |
+
+## 시나리오별 탐지 결과
+
+| 시나리오 | 라벨 | 탐지 | 판정 |
+|---|---|---|---|
+| dropout_confirmed | adsb_dropout | adsb_dropout(0.72) | OK |
+| dropout_unconfirmed | adsb_dropout | adsb_dropout(0.42) | OK |
+| dropout_present_mirror | 정상(음성) | — | OK |
+| emergency_hijack | emergency_squawk | emergency_squawk(0.95) | OK |
+| loitering_orbit | loitering | loitering(0.6) | OK |
+| military_callsign | military_approach | military_approach(0.55) | OK |
+| military_flag | military_approach | military_approach(0.55) | OK |
+| satellite_overhead | satellite_proximity | satellite_proximity(0.4) | OK |
+| narrative_hidden | adsb_dropout, satellite_proximity | adsb_dropout(0.72), satellite_proximity(0.4) | OK |
+| normal_transit_a | 정상(음성) | — | OK |
+| normal_transit_b | 정상(음성) | — | OK |
+| normal_transit_c | 정상(음성) | — | OK |
+
+## 맨몸 LLM vs 온톨로지+AIP 파이프라인
+
+질의: "지금 KADIZ에서 ADS-B가 끊긴 기체가 위성 통과·뉴스와 겹치나? 근거와 함께 답하라."
+
+| 항목 | 온톨로지+파이프라인 | 맨몸 LLM(claude -p) |
+|---|---|---|
+| 출처(provenance) | 문장별 cites → 객체 id 역추적 | 기계검증 가능한 출처 없음 |
+| 인용 문장 비율 | 11/11 (100%) | 구조적 인용 없음(자유 텍스트) |
+| 무근거 주장 | 0건(cites 없는 문장은 write 거부) | 검증 불가(사실 그라운딩 소스 없음) |
+| 종합 신뢰도 | 0.52(문장 평균, 저신뢰 뉴스 반영) | 표기 없음 |
+| 맨몸 출력(발췌) | — | '**결론: 위성 통과와는 겹침(부분), 뉴스와는 공간만 일치하고 시간은 어긋남.**\n\n## 1. ADS-B 끊김 구간 식별\n\nnvshadow는 60초 간격으로 갱신되다가 두 번 끊김:\n\n- **중간 공백**: ts=1782999340 → 1782999580 사이 **240초 공백** (예상 갱신 3회 누락)\n- **말단 침묵**: 마지막 수신 ts=1782' |
+
+> 비교의 본질 = **provenance 유무**. 파이프라인은 모든 문장이 온톨로지 객체 id를 인용(역추적 가능·환각 구조적 차단)하는 반면, 맨몸 LLM은 같은 원시 관측을 받고도 기계검증 가능한 출처를 남기지 못한다. 맨몸 호출 성공 여부와 무관하게 이 구조 차이가 핵심 우위다.
+
+## claude 서술 경로 실호출 (P4 이월 #4)
+
+- 서술 백엔드: `template(claude 폴백)` (claude 성공=False)
+- cites 불변(서술 다듬기 후에도 근거 매핑 동일): True
+- 실패/타임아웃 시 template로 폴백하며 cites·신뢰도는 불변(DR-0004).
+
+
+[eval] JSON 저장: /Users/ma/SKAI/docs/worklog/p5_eval.json · 소요 90.8s

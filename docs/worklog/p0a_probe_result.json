@@ -1,0 +1,253 @@
+{
+  "opensky": {
+    "source": "opensky",
+    "url": "https://opensky-network.org/api/states/all",
+    "params": {
+      "lamin": 32,
+      "lomin": 122,
+      "lamax": 39,
+      "lomax": 132
+    },
+    "status_code": 200,
+    "headers": {
+      "date": "Fri, 03 Jul 2026 15:11:46 GMT",
+      "content-type": "application/json",
+      "transfer-encoding": "chunked",
+      "connection": "keep-alive",
+      "vary": "Origin, Access-Control-Request-Method, Access-Control-Request-Headers",
+      "x-rate-limit-remaining": "398",
+      "x-content-type-options": "nosniff",
+      "x-xss-protection": "0",
+      "cache-control": "no-cache, no-store, max-age=0, must-revalidate",
+      "pragma": "no-cache",
+      "expires": "0",
+      "x-frame-options": "DENY",
+      "strict-transport-security": "max-age=15724800; includeSubDomains",
+      "access-control-allow-origin": "https://opensky-network.org"
+    },
+    "rate_limit_headers": {
+      "x-rate-limit-remaining": "398"
+    },
+    "aircraft_count": 34,
+    "response_time_utc": 1783091489,
+    "sample": [
+      {
+        "icao24": "84d283",
+        "callsign": "JJP11   ",
+        "origin_country": "Japan",
+        "time_position": 1783091488,
+        "last_contact": 1783091488,
+        "longitude": 131.3442,
+        "latitude": 32.1258,
+        "baro_altitude": 10363.2,
+        "on_ground": false,
+        "velocity": 222.89,
+        "true_track": 234.11,
+        "vertical_rate": 0,
+        "sensors": null,
+        "geo_altitude": 11125.2,
+        "squawk": "3647",
+        "spi": false,
+        "position_source": 0
+      },
+      {
+        "icao24": "896182",
+        "callsign": "UAE323  ",
+        "origin_country": "United Arab Emirates",
+        "time_position": 1783091488,
+        "last_contact": 1783091488,
+        "longitude": 126.605,
+        "latitude": 36.8032,
+        "baro_altitude": 4655.82,
+        "on_ground": false,
+        "velocity": 206.87,
+        "true_track": 172.86,
+        "vertical_rate": 22.76,
+        "sensors": null,
+        "geo_altitude": 4861.56,
+        "squawk": "4101",
+        "spi": false,
+        "position_source": 0
+      },
+      {
+        "icao24": "682211",
+        "callsign": "MGL309  ",
+        "origin_country": "Mongolia",
+        "time_position": 1783091479,
+        "last_contact": 1783091487,
+        "longitude": 125.1086,
+        "latitude": 37.1705,
+        "baro_altitude": 5509.26,
+        "on_ground": false,
+        "velocity": 216.17,
+        "true_track": 84.13,
+        "vertical_rate": -2.6,
+        "sensors": null,
+        "geo_altitude": 5783.58,
+        "squawk": null,
+        "spi": false,
+        "position_source": 0
+      }
+    ],
+    "status": "OK"
+  },
+  "celestrak_sgp4": {
+    "source": "celestrak_sgp4",
+    "url": "https://celestrak.org/NORAD/elements/gp.php",
+    "params": {
+      "GROUP": "stations",
+      "FORMAT": "tle"
+    },
+    "status_code": 200,
+    "tle_count": 23,
+    "sgp4_sample": {
+      "satellite": "ISS (ZARYA)",
+      "computed_at_utc": "2026-07-03T15:11:43.324792+00:00",
+      "eci_km": {
+        "x": -5870.81,
+        "y": -2979.28,
+        "z": -1694.45
+      },
+      "lat": -14.4334,
+      "lon": 57.3177,
+      "alt_km": 427.1,
+      "in_kadiz_bbox": false
+    },
+    "all_satellite_names": [
+      "ISS (ZARYA)",
+      "POISK",
+      "CSS (TIANHE)",
+      "ISS (NAUKA)",
+      "FREGAT DEB",
+      "CSS (WENTIAN)",
+      "CSS (MENGTIAN)",
+      "HRC MONOBLOCK CAMERA",
+      "SZ-21 MODULE",
+      "SOYUZ-MS 28",
+      "DUPLEX",
+      "KNACKSAT-2",
+      "CORAL",
+      "GXIBA-1",
+      "UITMSAT-2",
+      "LEOPARD",
+      "HMU-SAT2",
+      "CREW DRAGON 12",
+      "PROGRESS-MS 33",
+      "CYGNUS NG-24",
+      "PROGRESS-MS 34",
+      "TIANZHOU-10",
+      "SHENZHOU-23 (SZ-23)"
+    ],
+    "status": "OK"
+  },
+  "metar": {
+    "source": "metar",
+    "url": "https://aviationweather.gov/api/data/metar",
+    "params": {
+      "ids": "RKSI",
+      "format": "json"
+    },
+    "status_code": 200,
+    "raw_response": [
+      {
+        "icaoId": "RKSI",
+        "receiptTime": "2026-07-03T15:04:28.540Z",
+        "obsTime": 1783090800,
+        "reportTime": "2026-07-03T15:00:00.000Z",
+        "temp": 23,
+        "dewp": 22,
+        "wdir": 200,
+        "wspd": 8,
+        "visib": 4.35,
+        "altim": 1010,
+        "qcField": 16,
+        "metarType": "METAR",
+        "rawOb": "METAR RKSI 031500Z 20008KT 7000 BKN010 BKN020 23/22 Q1010 NOSIG",
+        "lat": 37.469,
+        "lon": 126.451,
+        "elev": 7,
+        "name": "Seoul/Incheon Intl, 28, KR",
+        "cover": "BKN",
+        "clouds": [
+          {
+            "cover": "BKN",
+            "base": 1000
+          },
+          {
+            "cover": "BKN",
+            "base": 2000
+          }
+        ],
+        "fltCat": "MVFR"
+      }
+    ],
+    "schema_fields": [
+      "icaoId",
+      "receiptTime",
+      "obsTime",
+      "reportTime",
+      "temp",
+      "dewp",
+      "wdir",
+      "wspd",
+      "visib",
+      "altim",
+      "qcField",
+      "metarType",
+      "rawOb",
+      "lat",
+      "lon",
+      "elev",
+      "name",
+      "cover",
+      "clouds",
+      "fltCat"
+    ],
+    "sample": {
+      "icaoId": "RKSI",
+      "receiptTime": "2026-07-03T15:04:28.540Z",
+      "obsTime": 1783090800,
+      "reportTime": "2026-07-03T15:00:00.000Z",
+      "temp": 23,
+      "dewp": 22,
+      "wdir": 200,
+      "wspd": 8,
+      "visib": 4.35,
+      "altim": 1010,
+      "qcField": 16,
+      "metarType": "METAR",
+      "rawOb": "METAR RKSI 031500Z 20008KT 7000 BKN010 BKN020 23/22 Q1010 NOSIG",
+      "lat": 37.469,
+      "lon": 126.451,
+      "elev": 7,
+      "name": "Seoul/Incheon Intl, 28, KR",
+      "cover": "BKN",
+      "clouds": [
+        {
+          "cover": "BKN",
+          "base": 1000
+        },
+        {
+          "cover": "BKN",
+          "base": 2000
+        }
+      ],
+      "fltCat": "MVFR"
+    },
+    "status": "OK"
+  },
+  "gdelt": {
+    "source": "gdelt",
+    "url": "https://api.gdeltproject.org/api/v2/doc/doc",
+    "params": {
+      "query": "\"KADIZ\" OR \"Korea Air Defense Identification Zone\" OR \"한국방공식별구역\"",
+      "mode": "artlist",
+      "maxrecords": "5",
+      "format": "json",
+      "timespan": "3d"
+    },
+    "status_code": 200,
+    "status": "PARTIAL",
+    "raw_text": "Queries containing OR'd terms must be surrounded by ().\n"
+  }
+}

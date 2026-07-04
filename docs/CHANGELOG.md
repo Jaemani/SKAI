@@ -1,0 +1,29 @@
+# 아키텍처·온톨로지 변경로그
+
+루트 기획문서(특히 `ontology.md`·`architecture.md`)에 대한 모든 변경을 기록.
+형식: `날짜 · [태그] 변경 요약 — 이유 (관련 DR)` · 태그: `[ontology]` `[architecture]` `[pipeline]` `[docs]`
+
+---
+
+## 2026-07-04
+
+- [docs] 문서 체계 분리 신설: `docs/decisions/`(의사결정) · `docs/CHANGELOG.md`(이 파일) · `docs/worklog/`(실행 로그) — 용도별 분리 사용자 지시 (DR-0001)
+- [ontology] **v0.1 기준선 확정** = `ontology.md` 초판: 객체 11종(Aircraft·Observation·Track·Satellite·OrbitPass·Region·WeatherState·NewsEvent·Operator·Anomaly·SituationAssessment) · 링크 11종 · 액션 4종(CreateAnomaly·Confirm/DismissAnomaly·GenerateSituationAssessment·SetRegionAlertLevel). 이후 온톨로지 변경은 전부 이 로그에 기록하고 스멜테스트(ontology.md §0) 재통과 확인.
+- [architecture] v0.1 기준선 = `architecture.md` 초판 (AIP-spine, 커넥터 4종, 이상탐지 7유형, 폴백=SQLite 동일 스키마)
+- [docs] `aip-integration.md` P0-B 검증 반영: §0-보강 신설(스키마 생성 UI 전용·OSDK private index 설치·Python <3.13 함정·토큰 발급 경로) + §3 설치/인증 스니펫 정정 — opus 에이전트 웹조사 검증분, 출처는 `docs/worklog/P0B-foundry.md` (DR-0002)
+- [pipeline] Foundry 왕복 BLOCKED 판정에 따른 경로 결정: 사용자 UI 액션 4개 대기 + Python 3.12 venv 선제 준비 + 저수준 `foundry_sdk`(3.14 지원)를 대체 경로 후보로 채택. **폴백(SQLite) 전환 아님** — AIP-spine 유지 (DR-0002)
+- [docs] `data-sources.md` 4소스 실응답 확인 소절 추가(P0-A 검증: OpenSky/Celestrak/METAR OK, GDELT 5초 간격 조건부) — sonnet 에이전트 실측분
+- [architecture] P1 구현 형태 확정: 저장 어댑터 분리(`OntologyStore` 인터페이스 + local SQLite 미러 + foundry 스텁), provenance 강제를 store 레벨에 선행 구현, P1 프론트는 FastAPI+vanilla Leaflet(React/Vite는 P4 재판단) (DR-0003)
+- [pipeline] **P1 수직관통 완료·검증**: `connectors/` `ontology/` `server/` `web/` `tests/` 신설. 온톨로지 v0.1 중 Aircraft·Observation·Track·Region + 링크 2종(observed_as·composed_of) 코드 구현. 테스트 14/14(provenance 거부·gap 판정·매핑), 라이브 3사이클 = Aircraft 32·Observation 71(dedup)·Track 32, 지도 렌더 검증(`docs/worklog/p1_map.png`). 프론트 read가 OSDK 대신 FastAPI→store_local인 것은 DR-0003 승인 편차 — Foundry 개통 시 원복
+- [ontology] Anomaly 객체 + evidenced_by/involves 링크 + CreateAnomaly/Confirm/Dismiss 액션의 코드 구현 착수(P2) — 스키마는 v0.1 그대로, 신규 정의 없음. 설명 생성은 ExplainerBackend 분리(template 기본/claude-cli 옵션/AIP Logic 스텁, DR-0004)
+- [pipeline] **P2 완료·검증**: 비상 스쿽 끝단(룰→설명→CreateAnomaly[evidence 강제]→타임라인/지도→confirm/dismiss) 동작. 테스트 32/32, 합성 주입 3종(7500/7600/7700) end-to-end, 상태 전이 영속 확인(`docs/worklog/p2_anomaly.png`). evidence 없는 Anomaly는 store 레벨 EvidenceError로 전 경로 차단. 합성 주입도 source="synthetic" provenance 유지
+- [architecture] P3 융합 확장 착수: 위성 카탈로그는 경량 그룹 한정 + TLE 12h 캐시, GDELT 5초 규율, 뉴스 confidence 저가중(≤0.4) + mentions 엔티티 링킹은 키워드 방식(해커톤 범위) (DR-0005)
+- [pipeline] **P3 완료·검증**: 4종 소스가 한 온톨로지에 공존 (OpenSky 74obs·Celestrak 94위성/99통과창·METAR 1·GDELT 뉴스 14). 테스트 58/58, GMST 보정 테스트 증명, 통합 화면 확인(`docs/worklog/p3_fusion.png`). Satellite·OrbitPass·WeatherState·NewsEvent 객체 + of/over/mentions 링크 코드 구현 — 스키마 v0.1 그대로
+- [ontology] provenance 강제 범위 확장: `validate_provenance` 덕타이핑화로 NewsEvent·WeatherState도 증거 객체로 강제. OrbitPass는 파생 계산 객체라 source_url 보존만(라이브 증거와 구분) — P3 실행 중 판단, 상세 `P3-fusion.md` §5
+- [pipeline] 이월 이슈(P3→P4/P5): OrbitPass 재계산 stale 누적(future-pass 정리 필요·P4에서 수정), 뉴스↔항적 상관은 콜사인 링킹 아닌 시공간 버킷으로(P5), GDELT 라이브 취약 → P6 스냅샷 재생에 뉴스 포함
+- [pipeline] **P4 완료·검증**: 자연어 질의→병렬 read→문장별 cites 강제 Assessment→채팅+서브그래프 SVG. 테스트 74/74, 질의 3개 end-to-end(전 문장 cites 유효 100%), 무근거 문장 혼입 시 전체 거부(SentenceEvidenceError)·무근거 질의는 no_evidence(환각 대신 침묵). OrbitPass stale 수정 포함 (`p4_copilot.png`·`p4_subgraph.png`, DR-0006)
+- [ontology] **GenerateSituationAssessment 액션 구현**(v0.1 액션 4종 중 3종째 — SetRegionAlertLevel만 잔여) + **AssessmentSentence 물질화**: v0.1의 "cites=문장별 근거"(§2)를 문장 1급 레코드로 구체화. 스멜테스트 판단 — 문장→cites→객체의 provenance 그래프(기준4) 구현 수단이며 새 도메인 개념 아님(속성의 구조화). 스키마 의미 변경 없음
+- [pipeline] **P5 완료·검증**: 이상탐지 5종(비상 스쿽+dropout·로이터링·군용기 접근·위성 근접 승격) + **correlated_with 링크 영속**(시공간 버킷 ±60분·공간 겹침) + "은닉 정황" 내러티브(dropout↔위성통과↔뉴스 — ontology.md §2 깊이 증명 그대로). 테스트 98/98, 평가 하네스: 합성 12시나리오 P/R 전 유형 1.00/1.00(결정적 세트 예상값·라이브 P/R은 별도), 맨몸 LLM 비교 = 파이프라인 문장 cites 100% vs 맨몸 검증가능 출처 0 (`p5_board.png`·`p5_narrative.png`, DR-0007)
+- [ontology] correlated_with 링크 코드 구현으로 **v0.1 링크 11종 전부 사용 상태** 도달. dropout 신뢰도 이원화(교차 미확인 0.42/합성 미러 확인 0.72 — "단정 금지"의 코드화). OpArea 데모 소구역 Region 추가(classification 기존 값 사용 — 스키마 변경 아님)
+- [pipeline] **P6 완료·검증 = PROMPTS P0~P6 전 단계 소화**: 데모 이중 모드(`demo.sh live|replay|stop`) + replay는 소켓 가드로 **네트워크 0 증명**(외부 egress 차단·luback만) + now 앵커링으로 연속 2회 바이트 동일 재현(SHA-256 일치). 테스트 106/106. demo.md 3분 대본(스텝별 화면·발화·폴백) + 심사 4항목 매핑 + 스토리보드 4장. Foundry는 "이관 준비 완료·크리덴셜 대기" 정직 문구 (DR-0008)
+- [docs] 잔여: Foundry 사용자 UI 액션 4개(P0-B 크리티컬 패스) · git 커밋(사용자 결정 대기) · 발표 리허설. P6 잔여 리스크 3건은 `P6-demo.md` 참조

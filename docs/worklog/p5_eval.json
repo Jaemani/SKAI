@@ -1,0 +1,237 @@
+{
+  "detection": {
+    "now": 1783000000,
+    "n_scenarios": 12,
+    "per_type": {
+      "emergency_squawk": {
+        "tp": 1,
+        "fp": 0,
+        "fn": 0,
+        "tn": 11,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "adsb_dropout": {
+        "tp": 3,
+        "fp": 0,
+        "fn": 0,
+        "tn": 9,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "loitering": {
+        "tp": 1,
+        "fp": 0,
+        "fn": 0,
+        "tn": 11,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "military_approach": {
+        "tp": 2,
+        "fp": 0,
+        "fn": 0,
+        "tn": 10,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "satellite_proximity": {
+        "tp": 2,
+        "fp": 0,
+        "fn": 0,
+        "tn": 10,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      }
+    },
+    "overall": {
+      "tp": 9,
+      "fp": 0,
+      "fn": 0,
+      "micro_precision": 1.0,
+      "micro_recall": 1.0
+    },
+    "per_scenario": [
+      {
+        "id": "dropout_confirmed",
+        "desc": "서해 작전구역 내 dropout — 미러가 부재 교차 확인(신뢰도 0.7대)",
+        "labels": [
+          "adsb_dropout"
+        ],
+        "detected": [
+          "adsb_dropout"
+        ],
+        "correct": true,
+        "confidences": {
+          "adsb_dropout": 0.72
+        }
+      },
+      {
+        "id": "dropout_unconfirmed",
+        "desc": "KADIZ 내 dropout — 2차 소스 없음(미확인, 신뢰도 0.4대, 단정 금지)",
+        "labels": [
+          "adsb_dropout"
+        ],
+        "detected": [
+          "adsb_dropout"
+        ],
+        "correct": true,
+        "confidences": {
+          "adsb_dropout": 0.42
+        }
+      },
+      {
+        "id": "dropout_present_mirror",
+        "desc": "gap 있으나 2차 소스가 여전히 관측 → 센서 아티팩트(교차검증이 오탐 차단)",
+        "labels": [],
+        "detected": [],
+        "correct": true,
+        "confidences": {}
+      },
+      {
+        "id": "emergency_hijack",
+        "desc": "KADIZ 내 스쿽 7500(하이재킹) 송신 → 비상 스쿽",
+        "labels": [
+          "emergency_squawk"
+        ],
+        "detected": [
+          "emergency_squawk"
+        ],
+        "correct": true,
+        "confidences": {
+          "emergency_squawk": 0.95
+        }
+      },
+      {
+        "id": "loitering_orbit",
+        "desc": "KADIZ 내 12분 원형 선회(변위/경로 비율 낮음) → 로이터링",
+        "labels": [
+          "loitering"
+        ],
+        "detected": [
+          "loitering"
+        ],
+        "correct": true,
+        "confidences": {
+          "loitering": 0.6
+        }
+      },
+      {
+        "id": "military_callsign",
+        "desc": "군 콜사인 RCH가 서해 작전구역 진입(저신뢰 휴리스틱)",
+        "labels": [
+          "military_approach"
+        ],
+        "detected": [
+          "military_approach"
+        ],
+        "correct": true,
+        "confidences": {
+          "military_approach": 0.55
+        }
+      },
+      {
+        "id": "military_flag",
+        "desc": "is_military 플래그 항공기가 서해 작전구역 진입",
+        "labels": [
+          "military_approach"
+        ],
+        "detected": [
+          "military_approach"
+        ],
+        "correct": true,
+        "confidences": {
+          "military_approach": 0.55
+        }
+      },
+      {
+        "id": "satellite_overhead",
+        "desc": "위성이 now 근방 KADIZ 상공을 최대앙각 84°로 통과 → 위성 근접",
+        "labels": [
+          "satellite_proximity"
+        ],
+        "detected": [
+          "satellite_proximity"
+        ],
+        "correct": true,
+        "confidences": {
+          "satellite_proximity": 0.4
+        }
+      },
+      {
+        "id": "narrative_hidden",
+        "desc": "은닉 정황: ADS-B 끊긴 기체 + 위성 통과 + 뉴스 언급이 correlated_with로 묶임",
+        "labels": [
+          "adsb_dropout",
+          "satellite_proximity"
+        ],
+        "detected": [
+          "adsb_dropout",
+          "satellite_proximity"
+        ],
+        "correct": true,
+        "confidences": {
+          "adsb_dropout": 0.72,
+          "satellite_proximity": 0.4
+        }
+      },
+      {
+        "id": "normal_transit_a",
+        "desc": "상용기 정상 통과(직선·정상 스쿽) → 이상징후 없어야 함",
+        "labels": [],
+        "detected": [],
+        "correct": true,
+        "confidences": {}
+      },
+      {
+        "id": "normal_transit_b",
+        "desc": "상용기 정상 통과 2(다른 항로) → 이상징후 없어야 함",
+        "labels": [],
+        "detected": [],
+        "correct": true,
+        "confidences": {}
+      },
+      {
+        "id": "normal_transit_c",
+        "desc": "상용기 정상 통과 3(짧은 직선) → 이상징후 없어야 함",
+        "labels": [],
+        "detected": [],
+        "correct": true,
+        "confidences": {}
+      }
+    ]
+  },
+  "bare_llm_comparison": {
+    "question": "지금 KADIZ에서 ADS-B가 끊긴 기체가 위성 통과·뉴스와 겹치나? 근거와 함께 답하라.",
+    "raw_input_chars": 697,
+    "pipeline": {
+      "n_sentences": 11,
+      "n_cited_sentences": 11,
+      "cited_ratio": 1.0,
+      "overall_confidence": 0.52,
+      "has_machine_citations": true,
+      "summary": "최근 30분(지금) 한국 방공식별구역 (KADIZ)에서 이상징후 2건·항적 1대를 확인했습니다.",
+      "unsupported_claims": 0
+    },
+    "bare_llm": {
+      "ok": true,
+      "reason": "",
+      "output_chars": 1088,
+      "has_machine_citations": false,
+      "output_excerpt": "**결론: 위성 통과와는 겹침(부분), 뉴스와는 공간만 일치하고 시간은 어긋남.**\n\n## 1. ADS-B 끊김 구간 식별\n\nnvshadow는 60초 간격으로 갱신되다가 두 번 끊김:\n\n- **중간 공백**: ts=1782999340 → 1782999580 사이 **240초 공백** (예상 갱신 3회 누락)\n- **말단 침묵**: 마지막 수신 ts=1782999700 @ (36.50, 125.00) 이후 갱신 없음 — \"지금\" 기준 진행 중인 끊김\n\n북동 방향 이동 중(60초당 약 +0.03°lat/+0.05°lon), squawk 2000(비지정 코드)로 식별성 낮음.\n\n## 2. 위성 통과와의 겹침 — **겹침**\n\n- NORAD 90007 통과창: **1782999820~1783000000**, 최대앙각 82°(거의 천정 통과 → KADIZ 커버 양호)\n- 마지막 ADS-B(1782999700) 이후 **120초 뒤 통과 시작** → 현재 침묵 구간이 통과창과 시간적으로 완전히 겹침\n- 이동 벡터 외삽 시 통과창 중간(~1782999910) 예상 위치 ≈ **(36.61, 125.18)** — KADIZ 서해 구역 내. 위성 교차확인(cross-cue)"
+    }
+  },
+  "claude_narration_check": {
+    "skipped": false,
+    "produced_by": "template(claude 폴백)",
+    "claude_succeeded": false,
+    "cites_invariant": true,
+    "n_sentences": 11
+  },
+  "elapsed_seconds": 90.8
+}

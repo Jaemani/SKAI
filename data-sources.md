@@ -15,6 +15,13 @@
 - 리밋: 익명 ~400 credits/day, 계정 ~4000+. 바운딩박스로 크레딧 절약.
 - 주의: 상태벡터 필드 순서 배열(문서 필드 인덱스 확인). 갱신 5~10초.
 
+#### 실응답 확인 (2026-07-04)
+- **상태**: OK (HTTP 200, 익명, KADIZ bbox)
+- **헤더**: `x-rate-limit-remaining: 398` (잔여 크레딧)
+- **스키마**: `{time: int, states: [[icao24, callsign, origin_country, time_position, last_contact, lon, lat, baro_altitude, on_ground, velocity, true_track, vertical_rate, sensors, geo_altitude, squawk, spi, position_source, category], ...]}`  인덱스 순서 고정 (상세는 worklog/P0A-sources.md)
+- **샘플 수신**: 34항적 (KADIZ bbox, 2026-07-03 15:11 UTC)
+- **gotcha**: `callsign` 공백 패딩 → `.strip()` 필수. `squawk`는 str 타입 → `== "7700"` 문자열 비교. `sensors`는 익명 시 null.
+
 ### ADS-B Exchange / adsb.fi / airplanes.live
 - 용도: 군용기 포함(필터 완화), OpenSky 공백 보완.
 - 접근: 공개 미러/피드 존재. ToS 확인.
@@ -28,6 +35,13 @@
 - 인증: 없음. 리밋: 캐시 존중, TLE는 하루 1~2회 갱신이면 충분.
 - 계산: `sgp4` 라이브러리로 TLE→위치. 관심지역 상공 통과창 계산.
 
+#### 실응답 확인 (2026-07-04)
+- **상태**: OK (HTTP 200, stations 그룹 23개 TLE 파싱)
+- **스키마**: 3줄 텍스트 블록 반복 — 이름줄 / Line1(`1 ...`) / Line2(`2 ...`). Line1: epoch·항력·원소번호. Line2: 경사각·승교점적경·이심률·평균운동·공전횟수.
+- **sgp4 검증**: `Satrec.twoline2rv(l1, l2)` → `sat.sgp4(jd, fr)` → ECI (km) 반환. ISS 위치 계산 완료 (lat -14.4°, lon 57.3°, alt 427km).
+- **KADIZ 통과 판정**: `lamin ≤ lat ≤ lamax and lomin ≤ lon ≤ lomax` bool 판정 동작 확인.
+- **gotcha**: ECI → 위경도 변환 시 GMST(Greenwich Mean Sidereal Time) 보정 필수. `error_code != 0` = 위성 만료 → 스킵. 실 운용 시 `active` 그룹 사용 (`stations`는 소규모 테스트용).
+
 ### Space-Track.org
 - 용도: 정밀 카탈로그·conjunction 데이터.
 - 인증: 무료 가입 필수. 리밋 엄격(쿼리 절약).
@@ -39,6 +53,12 @@
 - 엔드포인트: `https://aviationweather.gov/api/data/metar?ids=<ICAO>&format=json`.
 - 인증: 없음. 항공 표준 포맷.
 
+#### 실응답 확인 (2026-07-04)
+- **상태**: OK (HTTP 200, RKSI 1건)
+- **스키마**: JSON 배열. 주요 필드 — `icaoId`, `obsTime`(Unix), `reportTime`(ISO8601), `temp`(°C), `dewp`(°C), `wdir`(°), `wspd`(노트), `visib`(statute miles), `altim`(hPa), `rawOb`(원문), `lat/lon`(공항좌표), `clouds`([{cover, base_ft}]), `fltCat`(VFR/MVFR/IFR/LIFR).
+- **샘플**: `rawOb = "METAR RKSI 031500Z 20008KT 7000 BKN010 BKN020 23/22 Q1010 NOSIG"` (fltCat=MVFR)
+- **gotcha**: `visib` 단위는 statute miles (×1609.34 = m). `clouds[*].base` 단위는 **피트(ft)** — 미터와 혼용 금지.
+
 ### Open-Meteo
 - 용도: 격자 기상(바람·가시거리·구름) 지역 단위.
 - 엔드포인트: `https://api.open-meteo.com/v1/forecast?...`. 인증 없음, 관대한 리밋.
@@ -49,6 +69,13 @@
 - 용도: 글로벌 이벤트·뉴스 실시간 인덱스. 지역·키워드 필터.
 - 엔드포인트: `https://api.gdeltproject.org/api/v2/doc/doc?query=&mode=artlist&format=json`.
 - 인증: 없음.
+
+#### 실응답 확인 (2026-07-04)
+- **상태**: PARTIAL (엔드포인트 생존 확인, 레이트리밋 발동)
+- **원인**: 초기 프로브에서 5초 내 복수 요청 버스트 → IP 레벨 429. 엔드포인트 자체는 정상.
+- **스키마**: `{"articles": [{url, title, seendate, domain, language, sourcecountry, socialimage, url_mobile}]}`. 결과 없으면 `articles: null`.
+- **쿼리 문법**: OR 사용 시 전체 쿼리 괄호 감싸기 필수 — `("KADIZ" OR "Korea Air Defense Identification Zone")`. 미감싸면 HTTP 200 + 텍스트 오류(JSON 아님).
+- **gotcha**: 요청 간격 최소 5초 강제. `seendate` 포맷 `"YYYYMMDDTHHmmssZ"`. `articles` null 처리 필수 (`data.get("articles") or []`). 영문 기사 편향 — 영문 키워드 OR 조합 권장.
 
 ### NewsAPI / RSS / 웹검색
 - 용도: 사건 맥락 보강(citation 소스). 신뢰도 낮게 가중.

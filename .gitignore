@@ -1,0 +1,23 @@
+# Python
+.venv*/
+__pycache__/
+*.pyc
+
+# P1 런타임 산출물 (재생성 가능)
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# secrets
+.env
+*.token
+
+# 개인 오케스트레이션 규칙 (팀 공유 금지)
+CLAUDE.local.md
+
+# 도구 산출물
+.serena/
+
+# macOS
+.DS_Store
