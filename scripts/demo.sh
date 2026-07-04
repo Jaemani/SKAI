@@ -11,7 +11,8 @@
 # 환경변수(선택):
 #   SKAI_PORT          서버 포트. 기본 8000.
 #   SKAI_DEMO_ANCHOR   replay now 앵커(초). 기본 = eval.EVAL_NOW(SSOT). 재현성 위해 고정.
-#   LIVE_MAX_CYCLES    live 폴러 사이클 수. 기본 3(최소 — OpenSky 신규 호출 절약).
+#   SKAI_POLL_INTERVAL live 폴링 간격(초). 기본 25(하한 10). 크레딧 안전.
+#   LIVE_MAX_CYCLES    live 폴러 사이클 수. 기본 0=연속(무한, DR-0011). 유한값은 검증용.
 #
 # 격리: replay는 data/demo/skai_demo.db(런타임 data/skai.db와 분리). replay는 SKAI_OFFLINE=1로
 # 외부 egress를 소켓 레벨 차단(network 0 증명). 재생 질의는 web 프리셋 3개와 동일하다.
@@ -108,11 +109,12 @@ live() {
   echo $! >"$SERVER_PID"
   echo "서버 기동: pid $(cat "$SERVER_PID")  → http://localhost:$PORT"
 
-  # 라이브 폴러(최소 사이클 — OpenSky 신규 호출 절약).
-  POLL_INTERVAL="${POLL_INTERVAL:-15}" MAX_CYCLES="${LIVE_MAX_CYCLES:-3}" \
+  # 라이브 연속 폴러(DR-0011). 기본 무한(MAX_CYCLES=0)·간격 25s(하한 10s). stop이 SIGTERM으로
+  # 정리 종료(러너웨이 방지). 사이클마다 last_poll_ts를 사이드카에 기록 → /api/live LIVE 표시.
+  SKAI_POLL_INTERVAL="${SKAI_POLL_INTERVAL:-25}" MAX_CYCLES="${LIVE_MAX_CYCLES:-0}" \
     SKAI_DB="$live_db" nohup "$PY" -m connectors.opensky >"$POLLER_LOG" 2>&1 &
   echo $! >"$POLLER_PID"
-  echo "폴러 기동: pid $(cat "$POLLER_PID")  max_cycles=${LIVE_MAX_CYCLES:-3} (로그: $POLLER_LOG)"
+  echo "연속 폴러 기동: pid $(cat "$POLLER_PID")  interval=${SKAI_POLL_INTERVAL:-25}s max_cycles=${LIVE_MAX_CYCLES:-0}(0=연속) (로그: $POLLER_LOG)"
 
   # 내러티브 합성 가미 — 라이브 KADIZ엔 이상징후가 상시 없으므로(재현성) '지금' 창에
   # 은닉 정황 1건을 주입해 데모 서사를 보장한다(실 항적과 공존). now=현재 시각.

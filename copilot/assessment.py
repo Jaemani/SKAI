@@ -25,6 +25,18 @@ from typing import Optional
 from anomaly import correlation
 from anomaly.correlation import CORRELATION_WINDOW_SECONDS
 from copilot import tools
+from copilot.intent import (
+    INTENT_CORRELATION,
+    INTENT_COUNT,
+    INTENT_ENTITY_EXPLAIN,
+    INTENT_FILTER,
+    INTENT_NEWS,
+    INTENT_SITUATION_SUMMARY,
+    INTENT_WEATHER,
+    INTENT_WHY,
+    Intent,
+    classify,
+)
 from copilot.parser import ParsedQuery, parse_query
 from copilot.tools import Fact
 from ontology.model import AssessmentSentence, SituationAssessment
@@ -41,6 +53,7 @@ KIND_SATELLITE = "satellite"
 KIND_CORRELATION = "correlation"
 KIND_WEATHER = "weather"
 KIND_NEWS = "news"
+KIND_FLIGHT = "flight"  # 필터/카운트/엔티티 항적 상세(DR-0011 신규 의도용)
 
 
 def _fmt_hm(ts: int) -> str:
@@ -164,34 +177,9 @@ def _assemble_sentences(
     sents: list[AssessmentSentence] = []
 
     # ── 요약(헤드라인) — 인용은 요약이 집계하는 객체들 ──
-    n_anom = len(reads.anomalies)
-    n_flight = len(reads.flights)
-    # 요약 cites = 모든 이상징후 + 대표 항적 표본(최대 6). "N대" 전수 근거는 counts에 있고,
-    # 서브그래프/배지 가독을 위해 표본만 인용(무근거 아님 — 같은 tool read 산출).
-    summary_cites: list[str] = []
-    for f in reads.anomalies:
-        summary_cites.extend(f.cites)
-    flight_cites: list[str] = []
-    for f in reads.flights:
-        flight_cites.extend(f.cites[:1])
-    summary_cites.extend(flight_cites[:6])
-    if summary_cites:  # 이상징후/항적이 있을 때만 정량 요약(근거 있음)
-        summary_conf = (
-            max((f.confidence for f in reads.anomalies), default=0.0)
-            if reads.anomalies
-            else 0.85
-        )
-        sents.append(
-            AssessmentSentence(
-                text=(
-                    f"{label} {region_name}에서 이상징후 {n_anom}건·항적 {n_flight}대를 "
-                    f"확인했습니다."
-                ),
-                cites=_dedup(summary_cites),
-                confidence=round(summary_conf, 2),
-                kind=KIND_SUMMARY,
-            )
-        )
+    headline = _headline_sentence(region_name, label, reads)
+    if headline is not None:
+        sents.append(headline)
 
     # ── 이상징후 (문장당 이상징후 1건 + 근거) — 유형별 서술 ──
     for f in reads.anomalies:
@@ -208,6 +196,55 @@ def _assemble_sentences(
     sents.extend(_assemble_correlations_and_satellite(store, reads))
 
     # ── 기상 ──
+    sents.extend(_weather_sentences(pq, reads))
+
+    # ── 뉴스(저신뢰 OSINT) ──
+    news_sent = _news_sentence(region_name, reads)
+    if news_sent is not None:
+        sents.append(news_sent)
+
+    return sents
+
+
+# ── 섹션 조립 헬퍼(요약·기상·뉴스 SSOT — 상황요약과 포커스 의도가 공용) ─────────
+def _headline_sentence(
+    region_name: str, label: str, reads: ToolReads
+) -> Optional[AssessmentSentence]:
+    """정량 헤드라인 1문장. cites = 모든 이상징후 + 대표 항적 표본(최대 6).
+
+    "N대" 전수 근거는 counts에 있고, 서브그래프/배지 가독을 위해 표본만 인용(무근거 아님 —
+    같은 tool read 산출). 이상징후·항적이 하나도 없으면 None(무근거 헤드라인 금지).
+    """
+    n_anom = len(reads.anomalies)
+    n_flight = len(reads.flights)
+    summary_cites: list[str] = []
+    for f in reads.anomalies:
+        summary_cites.extend(f.cites)
+    flight_cites: list[str] = []
+    for f in reads.flights:
+        flight_cites.extend(f.cites[:1])
+    summary_cites.extend(flight_cites[:6])
+    if not summary_cites:
+        return None
+    summary_conf = (
+        max((f.confidence for f in reads.anomalies), default=0.0)
+        if reads.anomalies
+        else 0.85
+    )
+    return AssessmentSentence(
+        text=(
+            f"{label} {region_name}에서 이상징후 {n_anom}건·항적 {n_flight}대를 "
+            f"확인했습니다."
+        ),
+        cites=_dedup(summary_cites),
+        confidence=round(summary_conf, 2),
+        kind=KIND_SUMMARY,
+    )
+
+
+def _weather_sentences(pq: ParsedQuery, reads: ToolReads) -> list[AssessmentSentence]:
+    """기상 문장(공항별 1건). stale는 질의창 밖임을 명시한다."""
+    out: list[AssessmentSentence] = []
     for f in reads.weather:
         d = f.data
         cat = d.get("flight_category") or "—"
@@ -219,7 +256,7 @@ def _assemble_sentences(
             if d.get("stale")
             else ""
         )
-        sents.append(
+        out.append(
             AssessmentSentence(
                 text=(
                     f"관심지역 기상은 {d.get('station')} {cat} · 실링 {ceil} · 시정 {vis}"
@@ -230,26 +267,26 @@ def _assemble_sentences(
                 kind=KIND_WEATHER,
             )
         )
+    return out
 
-    # ── 뉴스(저신뢰 OSINT) ──
-    if reads.news:
-        top = reads.news[0].data
-        news_cites: list[str] = []
-        for f in reads.news:
-            news_cites.extend(f.cites)
-        sents.append(
-            AssessmentSentence(
-                text=(
-                    f"OSINT(저신뢰 ≤0.4) {len(reads.news)}건이 {region_name}를 언급 — "
-                    f"예: '{_clip(top.get('title'), 48)}'. 확증 아님, 하드 소스로 교차검증 요망."
-                ),
-                cites=_dedup(news_cites),
-                confidence=round(max(f.confidence for f in reads.news), 2),
-                kind=KIND_NEWS,
-            )
-        )
 
-    return sents
+def _news_sentence(region_name: str, reads: ToolReads) -> Optional[AssessmentSentence]:
+    """뉴스(저신뢰 OSINT) 요약 1문장. 뉴스가 없으면 None."""
+    if not reads.news:
+        return None
+    top = reads.news[0].data
+    news_cites: list[str] = []
+    for f in reads.news:
+        news_cites.extend(f.cites)
+    return AssessmentSentence(
+        text=(
+            f"OSINT(저신뢰 ≤0.4) {len(reads.news)}건이 {region_name}를 언급 — "
+            f"예: '{_clip(top.get('title'), 48)}'. 확증 아님, 하드 소스로 교차검증 요망."
+        ),
+        cites=_dedup(news_cites),
+        confidence=round(max(f.confidence for f in reads.news), 2),
+        kind=KIND_NEWS,
+    )
 
 
 def _assemble_correlations_and_satellite(
@@ -540,18 +577,321 @@ def _resolve_object(store, cid: str, ac_map: dict, sat_map: dict) -> Optional[di
     }
 
 
+# ── 의도별 조립(DR-0011) — 의도가 read·조립을 라우팅, cites 불변 ────────────────
+def _assemble_count(
+    store, pq: ParsedQuery, reads: ToolReads, slots: dict
+) -> list[AssessmentSentence]:
+    """집계(count) — 대상 종류를 세고 근거 객체를 인용한다. 0건이면 빈 리스트(→ no_evidence).
+
+    각 대상 Fact가 근거 객체 id(cites)를 들고 있어, "N건"은 그 id들을 인용해 근거가 붙는다
+    (무근거 카운트 금지). 군용은 필터 집계(query_flights military=True)로 센다.
+    """
+    target = (slots or {}).get("target", "flights")
+    region_name = _region_name(store, pq.region_id)
+    label = pq.window_label
+    win = (pq.window_start, pq.window_end)
+
+    if target == "anomalies":
+        facts, noun, unit = reads.anomalies, "이상징후", "건"
+        conf = round(max((f.confidence for f in facts), default=0.0), 2)
+    elif target == "passes":
+        facts, noun, unit, conf = reads.passes, "위성 통과", "건", 0.85
+    elif target == "news":
+        facts, noun, unit = reads.news, "OSINT 뉴스", "건"
+        conf = round(max((f.confidence for f in facts), default=0.0), 2)
+    elif target == "military":
+        facts = tools.query_flights(store, pq.region_id, win, military=True)
+        noun, unit = "군용 추정 항적", "대"
+        conf = round(
+            max((f.data.get("military_confidence", 0.0) for f in facts), default=0.0), 2
+        )
+    else:  # flights
+        facts, noun, unit, conf = reads.flights, "항적", "대", 0.9
+
+    cites = _dedup([c for f in facts for c in f.cites])
+    if not facts or not cites:
+        return []
+    particle = "을" if unit == "건" else "를"  # 받침 유무에 맞춘 목적격 조사
+    return [
+        AssessmentSentence(
+            text=(
+                f"{label} {region_name}에서 {noun} {len(facts)}{unit}{particle} 확인했습니다"
+                f"(근거 객체 {len(cites)}건 인용)."
+            ),
+            cites=cites,
+            confidence=conf,
+            kind=KIND_SUMMARY,
+        )
+    ]
+
+
+def _filter_desc(slots: dict) -> str:
+    """필터 슬롯 → 사람이 읽는 조건 문구(투명성)."""
+    parts: list[str] = []
+    mil = slots.get("military")
+    if mil is True:
+        parts.append("군용 추정")
+    elif mil is False:
+        parts.append("민간")
+    if slots.get("origin_country"):
+        parts.append(f"{slots['origin_country']} 국적")
+    if slots.get("operator"):
+        parts.append(f"operator '{slots['operator']}'")
+    if slots.get("aircraft_type"):
+        parts.append(f"기종 '{slots['aircraft_type']}'")
+    return " · ".join(parts) if parts else "지정 조건"
+
+
+def _flight_detail_sentence(f: Fact) -> AssessmentSentence:
+    """항적 1건 상세 문장(필터·엔티티용). cites = [Observation.id]."""
+    d = f.data
+    who = d.get("callsign") or d.get("icao24")
+    origin = d.get("origin_country") or "국적 미상"
+    mil = "군용 추정" if d.get("is_military") else "민간"
+    loc = (
+        f"{d['lat']:.2f}, {d['lon']:.2f}"
+        if d.get("lat") is not None and d.get("lon") is not None
+        else "위치 미상"
+    )
+    conf = d.get("military_confidence") if d.get("is_military") else f.confidence
+    return AssessmentSentence(
+        text=f"{who} — {origin}, {mil}, 위치 {loc}.",
+        cites=f.cites,
+        confidence=round(conf or f.confidence, 2),
+        kind=KIND_FLIGHT,
+    )
+
+
+def _assemble_filter(store, pq: ParsedQuery, slots: dict) -> list[AssessmentSentence]:
+    """필터(filter) — 조건에 맞는 항적을 헤드라인 + 최대 8건 상세로 조립. 0건이면 no_evidence.
+
+    조건 read는 query_flights의 슬롯 필터(military/origin/operator/type)로 좁힌다. 각 항적은
+    근거 관측(Observation) 1건을 인용한다(무근거 나열 금지).
+    """
+    region_name = _region_name(store, pq.region_id)
+    label = pq.window_label
+    win = (pq.window_start, pq.window_end)
+    facts = tools.query_flights(
+        store,
+        pq.region_id,
+        win,
+        military=slots.get("military"),
+        origin_country=slots.get("origin_country"),
+        operator=slots.get("operator"),
+        aircraft_type=slots.get("aircraft_type"),
+    )
+    if not facts:
+        return []
+    desc = _filter_desc(slots)
+    lead_cites = _dedup([c for f in facts for c in f.cites])[:12]
+    out = [
+        AssessmentSentence(
+            text=f"{label} {region_name}에서 {desc} 조건에 맞는 항적 {len(facts)}대.",
+            cites=lead_cites,
+            confidence=0.85,
+            kind=KIND_SUMMARY,
+        )
+    ]
+    for f in facts[:8]:
+        out.append(_flight_detail_sentence(f))
+    return out
+
+
+def _salient_by_kind(reads: ToolReads, kind: Optional[str]) -> Optional[Fact]:
+    """지시어(id 없음) 시 종류별로 가장 두드러진 Fact를 고른다(결정적)."""
+    if kind == "satellite":
+        return reads.passes[0] if reads.passes else None
+    if kind == "weather":
+        return reads.weather[0] if reads.weather else None
+    if kind == "news":
+        return reads.news[0] if reads.news else None
+    if kind == "flight":
+        return reads.flights[0] if reads.flights else None
+    # anomaly 또는 미상 → 최고신뢰 이상징후, 없으면(미상) 첫 항적.
+    if reads.anomalies:
+        return max(reads.anomalies, key=lambda f: f.confidence)
+    if kind is None and reads.flights:
+        return reads.flights[0]
+    return None
+
+
+def _entity_sentences(store, pq: ParsedQuery, fact: Fact) -> list[AssessmentSentence]:
+    """단건 엔티티 Fact → 설명 문장(kind별). cites = fact.cites(엔티티 + provenance)."""
+    d = fact.data
+    if fact.kind == "anomaly":
+        return [
+            AssessmentSentence(
+                text="요청하신 이상징후 — "
+                + _anomaly_sentence_text(d, fact.confidence),
+                cites=fact.cites,
+                confidence=round(fact.confidence, 2),
+                kind=KIND_ANOMALY,
+            )
+        ]
+    if fact.kind == "satellite":
+        win = f"{_fmt_hm(d['start_ts'])}~{_fmt_hm(d['end_ts'])}"
+        return [
+            AssessmentSentence(
+                text=(
+                    f"위성 {d.get('name')}(NORAD {d.get('norad_id')}) — 관심지역 상공 통과 "
+                    f"{win} UTC, 최대앙각 {float(d.get('max_elevation') or 0):.0f}°(정황)."
+                ),
+                cites=fact.cites,
+                confidence=round(fact.confidence, 2),
+                kind=KIND_SATELLITE,
+            )
+        ]
+    if fact.kind == "weather":
+        return _weather_sentences(pq, ToolReads([], [], [], [fact], []))
+    if fact.kind == "news":
+        return [
+            AssessmentSentence(
+                text=(
+                    f"OSINT 뉴스(저신뢰 {d.get('confidence'):.2f}) — "
+                    f"'{_clip(d.get('title'), 60)}'. 확증 아님, 교차검증 요망."
+                ),
+                cites=fact.cites,
+                confidence=round(fact.confidence, 2),
+                kind=KIND_NEWS,
+            )
+        ]
+    # flight
+    return [_flight_detail_sentence(fact)]
+
+
+def _assemble_entity(
+    store,
+    pq: ParsedQuery,
+    reads: ToolReads,
+    slots: dict,
+    focus_id: Optional[str],
+) -> list[AssessmentSentence]:
+    """엔티티 설명(entity_explain) — id/지시어로 단건을 골라 설명. 못 찾으면 no_evidence.
+
+    id(질의문 또는 focus_id)가 있으면 그 객체를, 없으면 지시어의 종류에서 가장 두드러진
+    것을 고른다. 문장은 그 객체와 provenance를 인용한다.
+    """
+    entity_id = focus_id or (slots or {}).get("entity_id")
+    kind = (slots or {}).get("entity_kind")
+    if entity_id:
+        # 명시 id → 그 객체만. 해소 안 되면 정직하게 no_evidence(엉뚱한 객체 대체 금지).
+        fact = tools.get_entity_fact(store, entity_id)
+        if fact is None:
+            return []
+    else:
+        # 지시어(id 없음) → 종류에서 가장 두드러진 것.
+        fact = _salient_by_kind(reads, kind)
+    if fact is None:
+        return []
+    return _entity_sentences(store, pq, fact)
+
+
+def _assemble_why(
+    store,
+    pq: ParsedQuery,
+    reads: ToolReads,
+    slots: dict,
+    focus_id: Optional[str],
+) -> list[AssessmentSentence]:
+    """근거 설명(why) — 이상징후가 왜 이상한지 유형 서술 + 저장된 판단 근거를 인용해 낸다.
+
+    id가 이상징후면 그것을, 아니면 가장 두드러진 이상징후를 설명한다. 이상징후가 없으면
+    no_evidence(무근거로 "왜"를 지어내지 않는다).
+    """
+    entity_id = focus_id or (slots or {}).get("entity_id")
+    if entity_id and entity_id.startswith("anomaly-"):
+        # 명시 이상징후 id → 그것만. 해소 안 되면 정직하게 no_evidence.
+        fact = tools.get_entity_fact(store, entity_id)
+        if fact is None:
+            return []
+    elif reads.anomalies:
+        # id 없음("왜") → 가장 두드러진 이상징후의 근거를 설명.
+        fact = max(reads.anomalies, key=lambda f: f.confidence)
+    else:
+        fact = None
+    if fact is None or fact.kind != "anomaly":
+        return []
+    d = fact.data
+    sents = [
+        AssessmentSentence(
+            text="왜 이상징후인가 — " + _anomaly_sentence_text(d, fact.confidence),
+            cites=fact.cites,
+            confidence=round(fact.confidence, 2),
+            kind=KIND_ANOMALY,
+        )
+    ]
+    expl = (d.get("explanation") or "").strip()
+    if expl:
+        sents.append(
+            AssessmentSentence(
+                text=f"판단 근거: {expl}",
+                cites=fact.cites,
+                confidence=round(fact.confidence, 2),
+                kind=KIND_ANOMALY,
+            )
+        )
+    return sents
+
+
+def _assemble_for_intent(
+    store,
+    pq: ParsedQuery,
+    reads: ToolReads,
+    intent_obj: Intent,
+    focus_id: Optional[str],
+) -> list[AssessmentSentence]:
+    """의도 → 조립 라우팅. situation_summary·미지 의도는 현행 전체 조립으로 폴백."""
+    it = intent_obj.intent
+    slots = intent_obj.slots or {}
+    if it == INTENT_COUNT:
+        return _assemble_count(store, pq, reads, slots)
+    if it == INTENT_FILTER:
+        return _assemble_filter(store, pq, slots)
+    if it == INTENT_ENTITY_EXPLAIN:
+        return _assemble_entity(store, pq, reads, slots, focus_id)
+    if it == INTENT_WHY:
+        return _assemble_why(store, pq, reads, slots, focus_id)
+    if it == INTENT_CORRELATION:
+        return _assemble_correlations_and_satellite(store, reads)
+    if it == INTENT_WEATHER:
+        return _weather_sentences(pq, reads)
+    if it == INTENT_NEWS:
+        s = _news_sentence(_region_name(store, pq.region_id), reads)
+        return [s] if s is not None else []
+    return _assemble_sentences(store, pq, reads)  # situation_summary
+
+
 # ── 공개 진입점 ──────────────────────────────────────────────────────────────
 def assess(
-    store, query: str, now: Optional[int] = None, explainer: Optional[str] = None
+    store,
+    query: str,
+    now: Optional[int] = None,
+    explainer: Optional[str] = None,
+    focus_id: Optional[str] = None,
+    intent: Optional[Intent] = None,
 ) -> dict:
-    """자연어 질의 → SituationAssessment 생성·영속 → 응답 dict(문장별 cites 포함).
+    """자연어 질의 → 의도 분류 → 의도별 조립 → SituationAssessment 생성·영속 → 응답 dict.
 
     이것이 GenerateSituationAssessment 액션(ontology.md §3)의 코드 구현이다:
-    파싱 → 병렬 read → 사실→문장 조립(cites 강제) → (옵션)서술 다듬기 → store 영속.
-    근거 사실이 하나도 없으면 no_evidence 응답(무근거 주장 대신 "못 찾음" 투명 보고 —
-    cites 없는 문장을 만들지 않으므로 Assessment 객체는 생성되지 않는다).
+    파싱 → 의도분류(DR-0011) → 병렬 read → 의도별 사실→문장 조립(cites 강제) →
+    (옵션)서술 다듬기 → store 영속. 근거 사실이 하나도 없으면 no_evidence 응답(무근거 주장
+    대신 "못 찾음" 투명 보고 — cites 없는 문장을 만들지 않으므로 Assessment는 생성되지 않는다).
+
+    focus_id: 프론트가 선택한 객체 id(엔티티/why 의도의 지시 대상). 질의문에 박힌 id보다 우선.
+    intent: 미리 분류된 Intent를 주입하면 재분류를 건너뛴다(테스트·재현). 기본은 자동 분류.
     """
     pq = parse_query(query, now=now)
+    # 의도 분류(규칙 1차 + SKAI_COPILOT_LLM=claude 시 모호 질의만 claude 폴백). 결정적 기본.
+    intent_obj = (
+        intent
+        if isinstance(intent, Intent)
+        else classify(
+            query,
+            now=pq.now,
+            llm=os.environ.get("SKAI_COPILOT_LLM"),
+            focus_id=focus_id,
+        )
+    )
     reads = _parallel_read(store, pq)
 
     # 상관 영속 — 질의 범위 이상징후를 위성통과·뉴스·다른 이상징후와 시공간 버킷으로 잇고
@@ -564,7 +904,7 @@ def assess(
     ]
     correlation.correlate(store, scope_anomalies, now=pq.now)
 
-    sentences = _assemble_sentences(store, pq, reads)
+    sentences = _assemble_for_intent(store, pq, reads, intent_obj, focus_id)
 
     region_name = _region_name(store, pq.region_id)
     counts = {
@@ -574,6 +914,11 @@ def assess(
         "weather": len(reads.weather),
         "news": len(reads.news),
     }
+    intent_meta = {
+        "confidence": intent_obj.confidence,
+        "matched": intent_obj.matched,
+        "backend": intent_obj.backend,
+    }
 
     # 근거 사실이 하나도 없음 → 무근거 주장 대신 투명한 "못 찾음"(Assessment 미생성).
     if not sentences:
@@ -581,11 +926,14 @@ def assess(
             "assessment_id": None,
             "no_evidence": True,
             "query": query,
+            "intent": intent_obj.intent,
+            "slots": intent_obj.slots,
+            "intent_meta": intent_meta,
             "region": {"id": pq.region_id, "name": region_name},
             "window": _window_dict(pq),
             "summary": (
-                f"{pq.window_label} {region_name}에서 근거 객체(관측·이상징후·통과·기상·뉴스)를 "
-                f"찾지 못했습니다 — 무근거 주장 대신 '해당 없음'을 보고합니다."
+                f"{pq.window_label} {region_name}에서 요청하신 근거 객체를 찾지 못했습니다"
+                f"(의도={intent_obj.intent}) — 무근거 주장 대신 '해당 없음'을 보고합니다."
             ),
             "sentences": [],
             "confidence": 0.0,
@@ -596,8 +944,13 @@ def assess(
         }
 
     # (옵션) LLM 서술 다듬기 — cites 불변, 실패 시 원문(DR-0004 폴백).
+    # SKAI_COPILOT_LLM(신규) 우선, 없으면 SKAI_EXPLAINER(하위호환). 기본 template=결정적.
     backend = "template"
-    name = (explainer or os.environ.get("SKAI_EXPLAINER", "template")).lower()
+    name = (
+        explainer
+        or os.environ.get("SKAI_COPILOT_LLM")
+        or os.environ.get("SKAI_EXPLAINER", "template")
+    ).lower()
     if name == "claude":
         sentences, backend = _polish_narration(sentences)
 
@@ -618,7 +971,12 @@ def assess(
         produced_by=backend,
         created_at=created_at,
         window_label=pq.window_label,
-        attrs={"counts": counts, "matched_region_alias": pq.matched_region_alias},
+        attrs={
+            "counts": counts,
+            "matched_region_alias": pq.matched_region_alias,
+            "intent": intent_obj.intent,
+            "slots": intent_obj.slots,
+        },
     )
     # GenerateSituationAssessment 액션 — 문장별 cites 강제 + aggregates/cites 링크 영속.
     store.write_assessment(assessment)
@@ -627,6 +985,9 @@ def assess(
         "assessment_id": assessment.id,
         "no_evidence": False,
         "query": query,
+        "intent": intent_obj.intent,
+        "slots": intent_obj.slots,
+        "intent_meta": intent_meta,
         "region": {"id": pq.region_id, "name": region_name},
         "window": _window_dict(pq),
         "summary": assessment.summary,

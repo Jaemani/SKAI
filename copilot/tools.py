@@ -13,7 +13,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
+
+from anomaly.military_db import classify_military
 
 
 # ── 사실 레코드 ────────────────────────────────────────────────────────────
@@ -58,11 +60,40 @@ def _region_of(store, region_id: str):
 
 
 # ── 툴 ──────────────────────────────────────────────────────────────────────
-def query_flights(store, region_id: str, window: tuple[int, int]) -> list[Fact]:
-    """관심지역·시간창 안의 현재 항적(항공기별 최신 관측 1건).
+def _effective_military(ac, icao24: str) -> tuple[bool, float, str]:
+    """군용 여부를 **저신뢰**로 종합(Aircraft.is_military 플래그 ∪ 콜사인·대역 휴리스틱).
+
+    반환 (is_military, confidence, reason). 필터·집계·서술에 공용. 어느 쪽도 안 걸리면 False.
+    단정이 아니라 정황임을 reason이 명시한다(rules.detect_military_approach와 같은 규율).
+    """
+    callsign = ac.callsign if ac else None
+    is_mil, conf, reason = classify_military(icao24, callsign)
+    if is_mil:
+        return True, conf, reason
+    if ac is not None and ac.is_military:
+        return True, 0.55, "관측 소스 is_military 플래그"
+    return False, 0.0, ""
+
+
+def query_flights(
+    store,
+    region_id: str,
+    window: tuple[int, int],
+    *,
+    military: Optional[bool] = None,
+    origin_country: Optional[str] = None,
+    operator: Optional[str] = None,
+    aircraft_type: Optional[str] = None,
+) -> list[Fact]:
+    """관심지역·시간창 안의 현재 항적(항공기별 최신 관측 1건). 선택적 조건 필터.
 
     필터: ts ∈ window AND 관측점이 Region bbox 안(within Region 지오펜스).
-    cites = [Observation.id]. Foundry: Observation.where(region, ts).iterate().
+    선택 조건(intent=filter/count 슬롯) — 모두 None이면 무필터(기존 계약 그대로):
+      military      True=군용 추정만 · False=민간만(저신뢰 군용 판정 기준)
+      origin_country OpenSky origin_country(영문명) 부분일치(대소문자 무시)
+      operator      Aircraft.operator_ref 또는 콜사인 프리픽스 부분일치
+      aircraft_type Aircraft.type 부분일치
+    cites = [Observation.id]. Foundry: Observation.where(region, ts, ...).iterate().
     """
     start, end = window
     region = _region_of(store, region_id)
@@ -75,6 +106,30 @@ def query_flights(store, region_id: str, window: tuple[int, int]) -> list[Fact]:
         if bbox is not None and not _in_bbox(o.lat, o.lon, bbox):
             continue
         ac = ac_map.get(o.aircraft_ref)
+        is_mil, mil_conf, mil_reason = _effective_military(ac, o.aircraft_ref)
+        origin = (o.attrs or {}).get("origin_country")
+
+        # ── 선택 조건 필터(슬롯) ──
+        if military is not None and is_mil != military:
+            continue
+        if origin_country is not None and not (
+            origin and origin_country.lower() in str(origin).lower()
+        ):
+            continue
+        if operator is not None:
+            hay = " ".join(
+                str(x or "")
+                for x in (
+                    ac.operator_ref if ac else None,
+                    ac.callsign if ac else None,
+                )
+            ).lower()
+            if operator.lower() not in hay:
+                continue
+        if aircraft_type is not None:
+            if not (ac and ac.type and aircraft_type.lower() in ac.type.lower()):
+                continue
+
         out.append(
             Fact(
                 kind="flight",
@@ -90,7 +145,12 @@ def query_flights(store, region_id: str, window: tuple[int, int]) -> list[Fact]:
                     "alt": o.alt,
                     "source": o.source,
                     "source_url": o.source_url,
-                    "is_military": ac.is_military if ac else False,
+                    "origin_country": origin,
+                    "operator_ref": ac.operator_ref if ac else None,
+                    "aircraft_type": ac.type if ac else None,
+                    "is_military": is_mil,  # 저신뢰 종합(플래그 ∪ 휴리스틱)
+                    "military_confidence": mil_conf,
+                    "military_reason": mil_reason,
                 },
             )
         )
@@ -246,3 +306,137 @@ def news(store, region_id: str, window: tuple[int, int], limit: int = 5) -> list
         )
     out.sort(key=lambda f: f.ts, reverse=True)  # 최신 우선
     return out[:limit]
+
+
+def get_entity_fact(store, entity_id: str) -> Optional[Fact]:
+    """단건 엔티티(id) → Fact(근거 traverse 포함). entity_explain·why 의도용.
+
+    id 접두어로 온톨로지 객체 타입을 판별해(model.CITE_ID_PREFIXES 규약) 해당 객체와 그
+    provenance를 인용에 담는다. 없으면 None(assessment가 no_evidence로 투명 보고).
+      anomaly- → Anomaly + evidenced_by 근거(cites=[a.id, *evidence]).
+      pass-    → OrbitPass(cites=[p.id]).  wx- → WeatherState.  news- → NewsEvent.
+      그 외    → Observation("{icao24}-{ts}") 또는 icao24 → 그 기체의 최신 관측(flight).
+    """
+    if entity_id.startswith("anomaly-"):
+        a = store.get_anomaly(entity_id)
+        if a is None:
+            return None
+        evidence_ids = store.query_evidence_ids(a.id)
+        return Fact(
+            kind="anomaly",
+            cites=[a.id, *evidence_ids],
+            confidence=a.confidence,
+            ts=a.ts,
+            data={
+                "id": a.id,
+                "type": a.type,
+                "status": a.status,
+                "squawk": (a.attrs or {}).get("squawk"),
+                "callsign": (a.attrs or {}).get("callsign"),
+                "meaning": (a.attrs or {}).get("meaning"),
+                "is_synthetic": (a.attrs or {}).get("is_synthetic", False),
+                "lat": a.lat,
+                "lon": a.lon,
+                "explanation": a.explanation,
+                "confidence": a.confidence,
+                "n_evidence": len(evidence_ids),
+                "attrs": a.attrs or {},
+            },
+        )
+    if entity_id.startswith("pass-"):
+        sat_map = store.satellite_map()
+        for p in store.query_orbitpasses():
+            if p.id != entity_id:
+                continue
+            sat = sat_map.get(p.satellite_ref)
+            return Fact(
+                kind="satellite",
+                cites=[p.id],
+                confidence=0.85,
+                ts=p.start_ts,
+                data={
+                    "id": p.id,
+                    "norad_id": p.satellite_ref,
+                    "name": sat.name if sat else p.satellite_ref,
+                    "object_type": sat.object_type if sat else None,
+                    "start_ts": p.start_ts,
+                    "end_ts": p.end_ts,
+                    "max_elevation": p.max_elevation,
+                },
+            )
+        return None
+    if entity_id.startswith("wx-"):
+        for w in store.query_weather_latest():
+            if w.id != entity_id:
+                continue
+            return Fact(
+                kind="weather",
+                cites=[w.id],
+                confidence=0.9,
+                ts=w.ts,
+                data={
+                    "id": w.id,
+                    "station": w.station,
+                    "flight_category": w.flight_category,
+                    "ceiling_ft": w.ceiling_ft,
+                    "visibility_sm": w.visibility_sm,
+                    "wind_dir": w.wind_dir,
+                    "wind_speed_kt": w.wind_speed_kt,
+                    "conditions": w.conditions,
+                    "stale": False,
+                },
+            )
+        return None
+    if entity_id.startswith("news-"):
+        for n in store.query_news():
+            if n.id != entity_id:
+                continue
+            return Fact(
+                kind="news",
+                cites=[n.id],
+                confidence=n.confidence,
+                ts=n.ts,
+                data={
+                    "id": n.id,
+                    "title": n.title,
+                    "confidence": n.confidence,
+                    "source_url": n.source_url,
+                    "entities": n.entities,
+                    "mentions_region": False,
+                },
+            )
+        return None
+
+    # 접두어 없음 → Observation id("{icao24}-{ts}") 또는 bare icao24 → 최신 관측.
+    o = store.get_observation(entity_id)
+    if o is None:
+        for cand in store.query_latest_observations():
+            if cand.aircraft_ref == entity_id:
+                o = cand
+                break
+    if o is None:
+        return None
+    ac = store.aircraft_map().get(o.aircraft_ref)
+    is_mil, mil_conf, mil_reason = _effective_military(ac, o.aircraft_ref)
+    return Fact(
+        kind="flight",
+        cites=[o.id],
+        confidence=0.9,
+        ts=o.ts,
+        data={
+            "icao24": o.aircraft_ref,
+            "callsign": ac.callsign if ac else None,
+            "squawk": o.squawk,
+            "lat": o.lat,
+            "lon": o.lon,
+            "alt": o.alt,
+            "source": o.source,
+            "source_url": o.source_url,
+            "origin_country": (o.attrs or {}).get("origin_country"),
+            "operator_ref": ac.operator_ref if ac else None,
+            "aircraft_type": ac.type if ac else None,
+            "is_military": is_mil,
+            "military_confidence": mil_conf,
+            "military_reason": mil_reason,
+        },
+    )

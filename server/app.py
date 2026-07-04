@@ -21,7 +21,9 @@ store 인터페이스에만 의존 → Foundry 교체 시 무변경.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -36,9 +38,43 @@ from copilot.assessment import (
 )
 from ontology.model import Anomaly
 from ontology.store_local import DEFAULT_DB, LocalOntologyStore
+from server.live_status import read_status
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 DB_PATH = os.environ.get("SKAI_DB", DEFAULT_DB)
+
+# LIVE 판정 여유 — 마지막 폴링이 이 시간(초) 안이면 LIVE로 본다(간격 3배 또는 90초 중 큰 값).
+_LIVE_STALE_FLOOR = 90
+
+
+def _live_view() -> dict:
+    """폴러 사이드카를 읽어 프론트 LIVE 인디케이터용 상태를 구성.
+
+    폴러가 없거나(replay·정적) last_poll_ts가 오래됐으면 live=False. 있으면 신선도로 판정.
+    반환: {live, last_poll_ts, mode, interval, cycle, last_poll_status, server_now, counts?}.
+    """
+    st = read_status(DB_PATH)
+    now = int(time.time())
+    if not st:
+        return {"live": False, "last_poll_ts": None, "mode": None, "server_now": now}
+    last = st.get("last_poll_ts")
+    interval = int(st.get("interval") or 25)
+    stale_limit = max(interval * 3, _LIVE_STALE_FLOOR)
+    live = bool(
+        st.get("mode") == "live"
+        and last is not None
+        and (now - int(last)) <= stale_limit
+    )
+    return {
+        "live": live,
+        "last_poll_ts": last,
+        "mode": st.get("mode"),
+        "interval": interval,
+        "cycle": st.get("cycle"),
+        "last_poll_status": st.get("last_poll_status"),
+        "last_cycle": st.get("last_cycle"),
+        "server_now": now,
+    }
 
 
 def _now_anchor() -> int | None:
@@ -60,9 +96,14 @@ app = FastAPI(title="SKAI Air ISR — P4 코파일럿 (citation Assessment)")
 
 
 class AssessRequest(BaseModel):
-    """POST /api/assess 본문 — 자연어 질의 1건."""
+    """POST /api/assess 본문 — 자연어 질의 1건 + 선택적 선택 객체 id.
+
+    focus_id: 프론트가 지도/타임라인에서 선택한 객체 id(엔티티/why 의도의 지시 대상).
+    질의문의 "이 이상징후" 같은 지시어를 그 객체로 확정한다(선택). 미전송이면 None(하위호환).
+    """
 
     query: str
+    focus_id: Optional[str] = None
 
 
 def _store() -> LocalOntologyStore:
@@ -327,23 +368,40 @@ def api_counts() -> dict:
 
 @app.get("/api/stats")
 def api_stats() -> dict:
-    """객체 카운트 (검증·상태표시용)."""
-    return _store().counts()
+    """객체 카운트 (검증·상태표시용) + LIVE 요약(last_poll_ts·live).
+
+    counts 키(테이블명→개수)는 그대로 두고 last_poll_ts·live만 덧붙인다(하위호환). 프론트가
+    한 번의 폴링으로 카운트와 LIVE 상태를 함께 읽을 수 있게 한다(자세한 상태는 /api/live).
+    """
+    counts = _store().counts()
+    lv = _live_view()
+    return {**counts, "last_poll_ts": lv["last_poll_ts"], "live": lv["live"]}
 
 
 # ── P4 코파일럿 ────────────────────────────────────────────────────────────
 @app.post("/api/assess")
 def api_assess(req: AssessRequest) -> dict:
-    """자연어 질의 → 문장별 cites 강제 SituationAssessment (GenerateSituationAssessment).
+    """자연어 질의 → 의도 분류 → 의도별 cites 강제 SituationAssessment (DR-0011).
 
-    응답: 파싱된 지역·시간창(투명성) + 문장별 {text, cites, confidence, kind} +
-    cited_objects(배지·하이라이트용 id→상세) + 종합 confidence. 근거 없으면 no_evidence.
+    응답: intent·slots·intent_meta(분류 투명성) + 파싱된 지역·시간창 + 문장별
+    {text, cites, confidence, kind} + cited_objects(배지·하이라이트용 id→상세) + 종합
+    confidence. 근거 없으면 no_evidence. focus_id는 엔티티/why 지시 대상으로 전달된다.
     """
     query = (req.query or "").strip()
     if not query:
         raise HTTPException(status_code=400, detail="질의가 비어 있습니다.")
     # replay 모드: SKAI_NOW_ANCHOR로 '지금'을 스냅샷 시각에 고정(재현성). 라이브는 None.
-    return assess(_store(), query, now=_now_anchor())
+    return assess(_store(), query, now=_now_anchor(), focus_id=req.focus_id)
+
+
+@app.get("/api/live")
+def api_live() -> dict:
+    """라이브 폴러 상태(프론트 LIVE 인디케이터). 폴러 없으면 live=False(replay·정적).
+
+    반환: {live, last_poll_ts, mode, interval, cycle, last_poll_status, last_cycle, server_now}.
+    프론트는 live=True면 LIVE 배지 + 마지막 갱신 경과시간(server_now - last_poll_ts)을 표시.
+    """
+    return _live_view()
 
 
 @app.get("/api/assessments")
