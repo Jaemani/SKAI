@@ -67,6 +67,7 @@
     .news-item .n-meta { display: flex; justify-content: space-between; gap: 8px; margin-top: 5px; color: #93a7bd; font-size: 10.5px; align-items: center; }
     .b-lowconf { background: #3a2a12; color: #ffc078; }
     .b-region { background: #2d2350; color: #c3a9ff; }
+    .b-stealthmole { background: #1e2d1e; color: #6ec96e; }
 
     /* 좌상단 이상징후 타임라인 */
     #timeline { top: 12px; left: 12px; width: 320px; max-height: 56vh;
@@ -471,10 +472,12 @@
         const region = (n.mentions || []).some((m) => m.type === "Region")
           ? ' <span class="badge b-region">KADIZ 언급</span>' : "";
         const dom = (n.attrs && n.attrs.domain) ? n.attrs.domain : n.source;
+        const srcBadge = n.source === "stealthmole"
+          ? ' <span class="badge b-stealthmole">다크웹</span>' : "";
         div.innerHTML =
           '<div class="n-title"><a href="' + n.source_url + '" target="_blank" rel="noopener">' +
           (n.title || "(제목 없음)") + "</a></div>" +
-          '<div class="n-meta"><span>' + dom + " · " + fmtClock(n.ts) + region + "</span>" +
+          '<div class="n-meta"><span>' + dom + " · " + fmtClock(n.ts) + srcBadge + region + "</span>" +
           '<span class="badge b-lowconf">신뢰도 ' + n.confidence.toFixed(2) + "</span></div>";
         list.appendChild(div);
       }
