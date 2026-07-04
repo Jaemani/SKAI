@@ -201,3 +201,44 @@ create-news-event의 `newsEvents`(자기참조), create-situation-assessment의 
 ## D-8. 마무리
 
 D-1·D-2만 끝나도 **데모 provenance 백본(Observation 근거 → 이상징후 → 상태전이 → set-alert)이 Foundry에서 완성**된다. D-3~D-6은 융합 완성도(전량 이관)용. 전부 반영 후 **OSDK 재발행**(D-7의 누락분 포함) → 코드측이 store_foundry 확장으로 이어받음.
+
+---
+
+# E부 — 완성도 라운드 (2026-07-04, §11~§13 배선 후 잔여 전량)
+
+> 백본은 완성(8타입 write/read·Anomaly evidence 강제·confirm 전이). 아래는 **그래프 완성도·위생·dual 해소**.
+> 순서 권장: E-1(안전 위생) → E-2(그래프) → E-3(속성) → **E-4(리네임, 몰아서)** → E-5(재발행 1회) → 코드측 재검증·갱신.
+
+## E-1. 액션 위생 (코드 영향 없음 — 바로 해도 안전)
+
+1. **`editrack` 삭제** — `edit-track`(표준)과 중복. 코드는 둘 다 참조 안 함(확인됨) → 커스텀 `editrack`을 지우고 표준 `edit-track` 유지.
+2. **edit-aircraft의 `isMilitary` 타입 String→Boolean** — 객체 속성·create와 불일치.
+3. **create-anomaly 가짜 에러 제거** — 실행마다 무해 ApplyActionFailed(코드가 흡수 중). 액션 Rules에서 **Create object + evidenced_by/involves Add-link 외의 부가 규칙**(알림·함수·잔여 add-link)을 하나씩 소거해 원인 제거. VALIDATE는 통과하고 EXECUTE만 실패하는 패턴 = 실행 단계 부가 규칙이 범인.
+
+## E-2. 그래프 완성 (traverse 가능해지는 것)
+
+1. **over**: OrbitPass의 `regionId` 속성 → **Region FK 링크로 지정** (§9부터 잔존 — 위성 통과↔지역 그래프 조인).
+2. **within 채움**: create-observation(및 edit-observation)에 **`regionId` 파라미터 추가 + 속성 바인딩** — 링크 구조는 이미 있는데 채울 수단이 없음. 지오펜스 진입 판정 그래프 완성.
+3. **correlated_with 채움**: create-anomaly에 `correlatedWith`(Anomaly, **Optional**) 링크 파라미터 추가(또는 별도 `add-correlation` 액션) — 은닉 정황 내러티브를 Foundry 그래프에도.
+4. **create-news-event의 mentions 파라미터(aircraft·operators·regions) Optional화** — 현재 required라 뉴스 인제스트가 억지 ref 마찰(§11 best-effort). Optional이면 dual 단순화.
+5. (선택·⚠️신중) create-anomaly `observations`를 단일→**다중(objectSet)** — 다중 근거 엣지 가능해짐. 단 §12에서 잘못 배선된 objectSet이 문제였던 전례가 있으니, 바꾸면 **즉시 재검증 요청**. 현행 단일도 코드(로컬 권위본)가 커버하므로 무리하지 않아도 됨.
+
+## E-3. 속성 보강 (코드의 dual/폴백 제거 — 각 String/Timestamp 1개씩)
+
+| Object | 추가 속성 | 해소되는 것 |
+|---|---|---|
+| WeatherState | `station`(String) | weatherId에서 역복원하는 꼼수 제거 |
+| OrbitPass | `groundTrackJson`(String) | 지도 궤적 레이어를 Foundry read로 |
+| SituationAssessment | `sentencesJson`(String) | 문장별 cites의 Foundry 보존(현재 로컬 권위본) |
+| Anomaly | `createdAt`(Timestamp) · `explainerBackend`(String) | 미저장 필드 보존 |
+| Observation | `attrsJson`(String) | origin_country 등 부가 필드(§5 잔존) |
+
+## E-4. ⚠️ 리네임 라운드 (몰아서 한 번에 — 코드 동시 수정 필요)
+
+`newParameter` → 각 create 액션의 실제 PK명으로: `icao24`(aircraft)·`obsId`(observation)·`anomalyId`(anomaly)·`id`(region)·`operatorId`·`noradId`·`passId`·`trackId`·`weatherId`·`newsId`·`assessmentId`.
+**주의**: 코드(store_foundry.py) 16곳이 `newParameter`로 호출 중 → **부분 리네임 = 그 타입 write 즉시 파손.** 전부 몰아서 바꾼 뒤 "리네임 완료"라고 알려주면 코드 일괄 갱신 + 재검증한다.
+
+## E-5. OSDK 재발행 (마지막 1회)
+
+- Object 11종 + **Action 전부 체크 — 특히 `set-region-alert-level`**(0.5.0·0.6.0 연속 누락 → 발행 화면에서 체크 여부 직접 확인).
+- 재발행 후 신호 → 코드측: introspection 재검증 → 리네임 반영 → 신규 속성/링크 배선 → 저수준 폴백 제거 검토.
