@@ -7,6 +7,8 @@
 #                            실 API 데이터만. 합성 주입 없음(DR-0012 갭#3: 순수 라이브 분리).
 #   scripts/demo.sh live --inject  라이브 + 내러티브 합성 1건 주입(데모 서사 보장용).
 #                            라이브 항적은 재현성 있는 이상징후가 상시 없으므로 발표 임팩트용.
+#   scripts/demo.sh live --inject military  라이브 + 서해 군용 접근 3대 합성 주입.
+#                            군용기는 공개 ADS-B에 안 잡히므로 합성으로만 시연(합성 배지로 구분).
 #   scripts/demo.sh stop     두 모드의 모든 프로세스 중지 + pid 정리.
 #   scripts/demo.sh status   실행 상태.
 #
@@ -108,13 +110,23 @@ replay() {
 }
 
 live() {
-  # $1 == "--inject" 이면 내러티브 합성 1건을 얹는다(데모 서사 보장). 기본은 순수 라이브.
+  # $1 == "--inject" 이면 합성 시나리오 1건을 얹는다(데모 서사 보장). 기본은 순수 라이브.
+  # $2 = 얹을 시나리오(선택, 기본 narrative_hidden). 'military'는 military_incursion 별칭.
+  #   live              순수 라이브(실데이터만)
+  #   live --inject     라이브 + narrative_hidden(기존 기본, 불변)
+  #   live --inject military            라이브 + 서해 군용 접근 3대(합성)
+  #   live --inject military_incursion  동일(정식 시나리오 id)
   local inject="no"
-  if [ "${1:-}" = "--inject" ]; then inject="yes"; fi
+  local scenario="narrative_hidden"
+  if [ "${1:-}" = "--inject" ]; then
+    inject="yes"
+    if [ -n "${2:-}" ]; then scenario="${2}"; fi
+    if [ "$scenario" = "military" ]; then scenario="military_incursion"; fi
+  fi
 
   local sources="${SKAI_POLL_SOURCES:-opensky,gdelt,metar,celestrak}"
   if [ "$inject" = "yes" ]; then
-    echo "=== LIVE (다중소스 실 API 폴링 + 내러티브 합성 1건) ==="
+    echo "=== LIVE (다중소스 실 API 폴링 + 합성 시나리오 '$scenario' 1건) ==="
   else
     echo "=== LIVE (순수 — 다중소스 실 API 폴링, 합성 없음) ==="
   fi
@@ -136,18 +148,19 @@ live() {
   echo $! >"$POLLER_PID"
   echo "연속 폴러 기동: pid $(cat "$POLLER_PID")  interval=${SKAI_POLL_INTERVAL:-25}s sources=$sources max_cycles=${LIVE_MAX_CYCLES:-0}(0=연속) (로그: $POLLER_LOG)"
 
-  # 내러티브 합성 가미(--inject 시에만) — 라이브 KADIZ엔 이상징후가 상시 없으므로(재현성) '지금'
-  # 창에 은닉 정황 1건을 주입해 데모 서사를 보장한다(실 항적과 공존). now=현재 시각.
+  # 합성 시나리오 가미(--inject 시에만) — 라이브 KADIZ엔 이상징후가 상시 없으므로(재현성) '지금'
+  # 창에 합성 서사 1건을 주입해 데모 서사를 보장한다(실 항적과 공존, 합성 배지로 구분). now=현재 시각.
+  # 군용기는 공개 ADS-B에 안 잡히므로 'military'(=military_incursion)로 서해 군용 접근을 시연한다.
   if [ "$inject" = "yes" ]; then
     local now; now="$(date +%s)"
-    echo "내러티브 합성 주입(narrative_hidden · now=$now) → $live_db"
+    echo "합성 시나리오 주입($scenario · now=$now) → $live_db"
     # --allow-live-db: 라이브 db 합성 주입은 레짐 가드(db-regime.md)로 명시 승인 필요.
     # live --inject는 '실 라이브 + 데모 서사 1건' 의도적 모드이므로 여기서만 승인한다.
     SKAI_DB="$live_db" "$PY" -m scripts.inject_synthetic \
-      --scenario narrative_hidden --now "$now" --db "$live_db" --allow-live-db \
+      --scenario "$scenario" --now "$now" --db "$live_db" --allow-live-db \
       | sed 's/^/  /' || true
   else
-    echo "순수 라이브: 합성 주입 없음(실데이터만). 데모 서사가 필요하면 'live --inject'."
+    echo "순수 라이브: 합성 주입 없음(실데이터만). 데모 서사가 필요하면 'live --inject [military]'."
   fi
 
   if _wait_health; then echo "헬스체크 OK"; else echo "경고: 헬스체크 실패"; fi
@@ -174,8 +187,8 @@ status() {
 
 case "${1:-}" in
   replay) replay ;;
-  live) live "${2:-}" ;;
+  live) live "${2:-}" "${3:-}" ;;
   stop) stop ;;
   status) status ;;
-  *) echo "사용법: $0 {replay|live [--inject]|stop|status}"; exit 1 ;;
+  *) echo "사용법: $0 {replay|live [--inject [scenario|military]]|stop|status}"; exit 1 ;;
 esac

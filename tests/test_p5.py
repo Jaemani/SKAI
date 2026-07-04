@@ -226,6 +226,35 @@ def test_military_negative_not_military():
     assert detect_military_approach([o], ac_map, [OPAREA_WEST_REGION], now=1000) == []
 
 
+def test_scan_all_military_incursion_end_to_end(tmp_path):
+    # 합성 군용 다중 접근 시나리오: 3대 → 군용 접근 3건만(다른 유형 오탐 없음),
+    # 전부 OpArea 내·저신뢰(≤0.65)·합성 표식. 탐지 3신호(명시 플래그·콜사인·icao24 대역)를
+    # 각 1대가 대표하는지 확인.
+    from anomaly.actions import scan_and_create_all
+    from scripts.scenarios import apply_scenario, scenario_by_id
+
+    store = _store(tmp_path)
+    now = 1783000000
+    sc = scenario_by_id("military_incursion")
+    mirror = apply_scenario(store, sc, now)
+    created = scan_and_create_all(store, now=now, crosscheck=mirror)
+    assert set(created.keys()) == {ANOMALY_TYPE_MILITARY_APPROACH}  # 군용 접근만
+    mils = [
+        a for a in store.query_anomalies() if a.type == ANOMALY_TYPE_MILITARY_APPROACH
+    ]
+    assert len(mils) == 3
+    for a in mils:
+        assert a.confidence <= 0.65  # 저신뢰(단정 금지)
+        assert a.attrs.get("region") == OPAREA_WEST_REGION.name  # OpArea 내
+        assert a.attrs.get("is_synthetic") is True  # 합성 표식(실항적 오도 금지)
+        assert len(store.query_evidence_ids(a.id)) >= 1  # 근거 관측 영속
+    # 탐지 3신호가 각각 하나씩 표현됐다(mil_reason 문자열).
+    reasons = " ".join(a.attrs.get("mil_reason", "") for a in mils)
+    assert "플래그" in reasons  # A) 명시 is_military 플래그
+    assert "프리픽스" in reasons  # B) 군 콜사인 프리픽스(ROKAF)
+    assert "대역" in reasons  # C) 군용 예약 icao24 대역
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 5. 위성 근접
 # ══════════════════════════════════════════════════════════════════════════════

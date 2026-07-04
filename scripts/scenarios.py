@@ -400,6 +400,80 @@ SCENARIOS: list[dict] = [
             }
         ],
     },
+    # ── 양성(복합·군용 전용): 서해 작전구역 군용기 다중 접근 ─────────────────────
+    # 배경(정직): 실제 군용기는 공개 ADS-B(OpenSky)에 거의 안 잡힌다(트랜스폰더 OFF·필터링).
+    # 그래서 "군용기 접근"은 라이브로 재현 불가 → **합성으로 별도 선언**한다. 이 시나리오는
+    # 서해 OpArea에 3대의 군용 항적(위협 접근 + 우방 요격 + 정찰)이 진입하는 인시던트를 그린다.
+    # 기존 단발 military_callsign·military_flag와 독립(추가) — 다중기 서사 + 탐지 3신호 전량 시연.
+    #
+    # 탐지 신호 3종을 각 항적이 하나씩 대표한다(detect_military_approach + military_db):
+    #   A) 명시 is_military 플래그(합성 선언)   — 콜사인·대역 휴리스틱이 못 잡는 미식별 접근기.
+    #   B) 군 콜사인 프리픽스(military_db)        — ROKAF 등 문서화된 군 콜사인.
+    #   C) 군용 예약 icao24 대역(military_db)     — 미 정부/군용 예약대역 0xAE0000–0xAFFFFF.
+    # 전부 **저신뢰**(≤0.65 — 단정 금지, CLAUDE.md 기술기준) · source="synthetic"(실항적 오도 금지).
+    #
+    # 정직 주석: 콜사인 라벨(PLAAF01 등)은 **사람이 읽는 데모 라벨**이지 탐지 근거가 아니다.
+    # PLAAF01 항적의 탐지 근거(mil_reason)는 "관측 소스 is_military 플래그"(합성 명시)로 뜬다
+    # — "PLAAF가 실제 ADS-B 프리픽스"라는 주장이 아니다. icao24는 국가 대역만 현실적으로 부여
+    # (중국 0x78****·한국 0x71****·미 군용예약 0xAE****). 러시아 접근기는 A와 동일한 명시-플래그
+    # 경로로 동형 확장 가능(신호 중복 회피 위해 여기선 3신호 각 1대만 둔다).
+    {
+        "id": "military_incursion",
+        "desc": "서해 작전구역 군용기 3대 접근(위협·요격·정찰) — 탐지 3신호 전량, 전부 저신뢰·합성",
+        "labels": {T_MILITARY},
+        "tracks": [
+            # A) 미식별 접근기(중국 대역 라벨) — 명시 is_military 플래그로만 탐지(0.55).
+            {
+                "icao24": "780a1c",  # 중국 ICAO 대역(0x78****) — 군용 예약대역 아님(플래그로 판정)
+                "callsign": "PLAAF01",  # 데모 라벨(탐지 근거 아님 — is_military 플래그가 근거)
+                "is_military": True,
+                "pattern": "line",
+                # OpArea 내 짧은 직선(5분·gap 없음·정상 스쿽) → 군용 접근만 트리거.
+                "params": {
+                    "lat": 36.6,
+                    "lon": 124.2,
+                    "dlat": 0.02,
+                    "dlon": 0.03,
+                    "n": 6,
+                    "dt_start": -300,
+                    "dt_end": 0,
+                    "squawk": "2000",
+                },
+            },
+            # B) 우방 요격기 — 군 콜사인 프리픽스(ROKAF)로 탐지(0.55, military_db 휴리스틱).
+            {
+                "icao24": "71ba22",  # 한국 ICAO 대역(0x71****)
+                "callsign": "ROKAF31",  # military_db 프리픽스 매칭 → 콜사인 신호
+                "pattern": "line",
+                "params": {
+                    "lat": 35.8,
+                    "lon": 125.0,
+                    "dlat": 0.03,
+                    "dlon": -0.02,
+                    "n": 6,
+                    "dt_start": -300,
+                    "dt_end": 0,
+                    "squawk": "2000",
+                },
+            },
+            # C) 정찰기 — 군용 예약 icao24 대역(0xAE****)으로 탐지(0.5, 대역 신호). 콜사인은 비군용.
+            {
+                "icao24": "ae1492",  # 미 정부/군용 예약대역(0xAE0000–0xAFFFFF)
+                "callsign": "OLIVE21",  # 군 프리픽스 아님 → icao24 대역 신호로만 판정(라벨)
+                "pattern": "line",
+                "params": {
+                    "lat": 37.0,
+                    "lon": 123.8,
+                    "dlat": -0.02,
+                    "dlon": 0.03,
+                    "n": 6,
+                    "dt_start": -300,
+                    "dt_end": 0,
+                    "squawk": "2000",
+                },
+            },
+        ],
+    },
     # ── 양성: 위성 근접 (over 민감구역 · near-overhead · now±) ──
     {
         "id": "satellite_overhead",
