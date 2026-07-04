@@ -97,11 +97,17 @@ D4D 해커톤 T2·공중. 이 문서는 **발표자용 대본 + 리허설 체크
   스쿽(7500) → 이상징후 생성(근거 강제·§12 에러 흡수 → evidenced_by/involves 엣지), (c) confirm 전이가
   반영된다. 콘솔이 생성된 **anomalyId**와 각 단계 OK를 출력하니 그 값으로 UI에서 찾는다. (라이브로
   돌리며 내레이션해도 됨 — 콘솔 출력 자체가 "실 Foundry에 쓰는 중"의 증거.)
-- **발화**: "그리고 이건 로컬 데모가 아니라 **실제 Palantir Foundry**에서 똑같이 돕니다. 방금 한
-  커맨드로 — OpenSky 실 항적이 Foundry의 Aircraft/Observation 객체로 들어가 observed_as로
-  연결되고, 비상 스쿽 이상징후가 **근거 관측을 evidenced_by로 물고** 생성됩니다. 근거 없는
-  이상징후는 여기서도 거부돼요. 분석가가 confirm하면 상태가 confirmed로 **Foundry에 영속
-  전이**됩니다. 로컬에서 보신 온톨로지·결정루프·provenance가 AIP 위에서 1:1로 재현되는 겁니다."
+- **발화**: "탐지와 추론 엔진은 저희 코드입니다. 저희가 Palantir에 올린 건 **온톨로지와 결정
+  게이트**예요. 방금 한 커맨드로 OpenSky 실 항적이 Foundry Aircraft/Observation 객체로 들어가고,
+  비상 스쿽 이상징후가 근거 관측을 evidenced_by로 물고 생성됩니다. 핵심은 — **근거 없는 이상징후는
+  Palantir 액션 검증이 거부합니다. 저희 앱을 우회해서 접근해도요.** 분석가의 confirm은 Foundry에
+  영속되는 상태 전이고요. 즉 저희 앱이 사라져도 데이터·근거 강제 규칙·결정 기록은 플랫폼에
+  남습니다 — 배포 패러다임의 최소 단위를 구현·검증했습니다. AIP Logic 추론 이전은 다음 단계입니다."
+- **정직 프레임(필수)**: "AIP가 추론한다"고 말하지 않는다 — 추론(탐지 룰·설명·평가)은 우리 엔진이고
+  AIP Logic은 미사용. 우리가 실사용하는 것 = 온톨로지(스키마 레벨 evidence 강제)·액션(상태 전이
+  영속)·OSDK(발행·read). Palantir 심사위원 앞에서 과장은 즉발 리스크. 사용 수준을 선제적으로 정확히
+  말하는 게 방어가 아니라 공격이다 — "스키마 레벨 근거 강제(클라이언트 무관)"는 로컬 스택으로
+  재현 불가한 실질 이점이므로 그것만 정확히 어필.
 - **Palantir UI에서 보여줄 것(각 ~7초)**:
   1. **Aircraft → observations traverse**: Object Explorer에서 방금 쓴 Aircraft(콘솔이 안내한 hex)를
      열고 `observations` 링크 → observed_as FK로 연결된 실 관측이 뜬다.
