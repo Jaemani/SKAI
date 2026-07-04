@@ -12,6 +12,7 @@ D4D 해커톤 T2·공중. 이 문서는 **발표자용 대본 + 리허설 체크
 | **재생(기본)** | `scripts/demo.sh replay` | **네트워크 호출 0**. 데모 전용 DB(`data/demo/`)에 선언적 시나리오 전체 주입 + now 앵커링 + 서버만 기동. 오프라인·발표장 네트워크 불문 **언제 돌려도 동일 결과**. 발표의 안전한 백본. |
 | 라이브(임팩트) | `scripts/demo.sh live` | 실 OpenSky 폴링(항적이 실제로 움직임) + 서버 + 내러티브 합성 1건 가미. 네트워크·API가 살아있을 때 오프닝 임팩트용. |
 | 정지 | `scripts/demo.sh stop` | 두 모드의 모든 프로세스 종료. |
+| **Foundry 실연**(스텝 ⑥) | `scripts/demo_foundry.sh` | 위 로컬 서버와 별개. 실 Palantir Foundry에 OpenSky 인제스트 + 합성 이상징후(근거 강제) + confirm을 라이브로 쓴다(§1 ⑥). 실패 안전·폴백 내장. 종료 후 `... cleanup`. |
 
 - **발표 원칙**: 전체 워크스루는 **재생 모드**로 한다(결정적·안전). 라이브는 오프닝 10~15초만
   선택적으로 쓰고, 조금이라도 불안하면 처음부터 재생으로 간다. 어느 스텝에서 라이브가 깨져도
@@ -89,22 +90,39 @@ D4D 해커톤 T2·공중. 이 문서는 **발표자용 대본 + 리허설 체크
   0**입니다. 차이의 본질은 provenance예요."
 - **폴백**: 슬라이드는 정적이라 실패 없음. (라이브 수치 재계산은 발표 중 하지 않음 — 사전 산출값 인용.)
 
-### ⑥ 배포 경로 — Foundry 이원화 (정직) — 2:20~2:45 (25초)
-- **발화**: "온톨로지는 로컬 스택으로 지금 보신 것처럼 **Action→상태전이→provenance**가 다 돕니다.
-  동시에 이건 **Palantir Foundry 이관이 설계상 준비 완료**예요 — 저장 어댑터가 인터페이스로
-  분리돼 있고(`store_foundry` 스텁 + `aip-integration.md`에 OSDK/AIP Logic 실사용 경로), 스키마는
-  Ontology Manager UI에서 생성하는 단계만 남았습니다. **크리덴셜이 도착하면** 이 스텁을 채워
-  커넥터·API 변경 없이 로컬↔Foundry를 교체합니다."
-- **정직성 주의(필수)**: 로컬을 AIP인 척하지 않는다. "지금 화면은 로컬 스택, Foundry는 **준비
-  완료·크리덴셜 대기**"라고 명시. Foundry 개통 시 이 스텝을 실 Foundry 화면으로 교체(교체 지점을
-  대본에 별도 표시 — 아래 §3).
+### ⑥ 배포 경로 — Foundry 라이브 실연 — 2:20~2:48 (28초)
+- **화면**: 발표 전 미리 로그인해 둔 **Palantir Foundry Object Explorer** 탭(준비 절차 P6-demo.md §6).
+- **사전 실행(권장)**: 스텝 ⑤ 내레이션 중(또는 ⑥ 진입 직전) 터미널에서 `scripts/demo_foundry.sh` 한 번.
+  ~15초간 실 Foundry에 (a) OpenSky 실 항적 → Aircraft/Observation(observed_as FK), (b) 합성 비상
+  스쿽(7500) → 이상징후 생성(근거 강제·§12 에러 흡수 → evidenced_by/involves 엣지), (c) confirm 전이가
+  반영된다. 콘솔이 생성된 **anomalyId**와 각 단계 OK를 출력하니 그 값으로 UI에서 찾는다. (라이브로
+  돌리며 내레이션해도 됨 — 콘솔 출력 자체가 "실 Foundry에 쓰는 중"의 증거.)
+- **발화**: "그리고 이건 로컬 데모가 아니라 **실제 Palantir Foundry**에서 똑같이 돕니다. 방금 한
+  커맨드로 — OpenSky 실 항적이 Foundry의 Aircraft/Observation 객체로 들어가 observed_as로
+  연결되고, 비상 스쿽 이상징후가 **근거 관측을 evidenced_by로 물고** 생성됩니다. 근거 없는
+  이상징후는 여기서도 거부돼요. 분석가가 confirm하면 상태가 confirmed로 **Foundry에 영속
+  전이**됩니다. 로컬에서 보신 온톨로지·결정루프·provenance가 AIP 위에서 1:1로 재현되는 겁니다."
+- **Palantir UI에서 보여줄 것(각 ~7초)**:
+  1. **Aircraft → observations traverse**: Object Explorer에서 방금 쓴 Aircraft(콘솔이 안내한 hex)를
+     열고 `observations` 링크 → observed_as FK로 연결된 실 관측이 뜬다.
+  2. **Anomaly의 evidenced_by**: Anomaly 객체 목록에서 방금 생성된 emergency_squawk 이상징후를 열어
+     `evidenced_by`(→ 근거 Observation)·`involves`(→ Aircraft) 링크를 짚는다 = provenance 그래프가
+     flat table이 아니라 Foundry 온톨로지 그래프로 산다.
+  3. **confirm 후 status**: 같은 Anomaly의 `status = confirmed` = Action 상태전이가 Foundry에 영속.
+- **정직성 주의(필수)**: 합성 이상징후는 `source=synthetic`으로 명시된 **주입건**임을 밝힌다(실 항적을
+  하이재킹으로 오도하지 않음 — 결정루프·근거강제를 보이기 위한 마킹된 합성 신호). 실 항적 인제스트와
+  합성 이상징후는 분명히 구분해서 말할 것.
+- **폴백(중요)**: Foundry/네트워크 불안정 시 `demo_foundry.sh`가 명확한 실패 메시지 + "replay 전환"
+  안내를 출력한다. 그러면 **이 스텝만 통째로 스킵**하고 이미 ①~④에서 보인 로컬 데모로 갈음 —
+  스텝 ⑦ 클로징을 12초→22초로 늘려 시간을 흡수한다(전체 3분 유지). Foundry가 죽어도 발표는 안 멈춘다.
 
-### ⑦ 심사 4항목 클로징 — 2:45~3:00 (15초)
+### ⑦ 심사 4항목 클로징 — 2:48~3:00 (12초)
 - 부록 A의 4문장을 빠르게(각 ~3초). "**문제**는 파편화된 공중 상황인식, **군 배포성**은
   온톨로지→결정→Action에 KADIZ 라이브·출처·분석가 워크플로, **기술**은 4소스 융합+AIP Logic
   이상탐지+citation 강제, **창의성**은 ADS-B dropout·위성 conjunction·교차소스 은닉 정황. 감사합니다."
 
-**총 소요 ≈ 3:00** (버퍼: ⑤⑥에서 각 5초 여유. 시간 압박 시 ⑥을 15초로 줄이고 ⑦과 합침.)
+**총 소요 ≈ 3:00** (버퍼: ⑤에서 5초 여유. 시간 압박 시 ⑥ UI 시연을 2개로 줄임(Aircraft traverse는
+생략, evidenced_by + confirm만). ⑥ 폴백 발동 시 ⑦을 22초로 늘려 흡수 — 전체 3분 유지.)
 
 ---
 
@@ -130,16 +148,26 @@ D4D 해커톤 T2·공중. 이 문서는 **발표자용 대본 + 리허설 체크
 
 ---
 
-## 3. Foundry 이관 시 교체 지점 (개통 후 대본 diff)
+## 3. Foundry 실연 — 전환 완료 (2026-07-04)
 
-Foundry 크리덴셜이 도착하면 아래만 교체한다(나머지 대본 불변):
+크리덴셜이 도착해 **스텝 ⑥이 "준비 완료·대기" 문구에서 실 Foundry 실연으로 교체됐다**(위 §1 ⑥).
+`store_foundry.py`의 스텁이 실배선으로 채워져(P7 §11~§13), `SKAI_STORE=foundry`로 11 Object Type
+write/read + Anomaly dual-write(evidenced_by 강제·§12 무해 에러 흡수) + confirm/dismiss 전이가 실
+Palantir에서 돈다. 커넥터·서버·API 계약은 무변경(어댑터 교체만) — 로컬↔Foundry는 환경변수 하나로 갈린다.
 
-- **스텝 ⑥ 발화** → "준비 완료·대기" 대신 실제 **Ontology Manager 화면**(Aircraft/Anomaly Object
-  Type, CreateAnomaly Action)과 **OSDK로 read/write하는 앱**을 시연.
-- **스텝 ③ confirm** → 로컬 `set_anomaly_status` 대신 **Foundry Action**(staged human review) 화면으로
-  교체 가능(상태 전이 서사는 동일).
-- 근거 문서: `aip-integration.md` §0-보강(P0-B 검증), `docs/worklog/P0B-foundry.md`. 스텁 위치:
-  `ontology/store_foundry.py`(구현 TODO 1~4 명시).
+- **실연 커맨드**: `scripts/demo_foundry.sh` — (a) OpenSky 1사이클 인제스트 → Palantir Aircraft/
+  Observation(observed_as FK), (b) 합성 비상 스쿽 → write_anomaly(근거 강제·에러 흡수) → Foundry
+  Anomaly + evidenced_by/involves 엣지, (c) confirm 전이. 원커맨드·발표용 출력·실패 안전(폴백 안내)·
+  OpenSky 1회/실행. 발표 후 정리 = `scripts/demo_foundry.sh cleanup`.
+- **데모 자산**: (b)(c) 산출물은 Object Explorer에서 보여주려 **의도적으로 남긴다**(P7 §13 "순증 0"과
+  구분). 합성 식별자는 실행마다 유니크(정리 접두 매칭)이고 매 실행 시작에 직전 합성 자산을 정리해
+  누적을 막는다. 실 hex 인제스트분은 실데이터로 보존.
+- **폴백 지점**: Foundry/네트워크 실패 시 이 스텝만 스킵하고 `demo.sh replay` 로컬 데모로 갈음(§1 ⑥
+  폴백 — ⑦ 확장으로 시간 흡수). 로컬 스택(스텝 ①~④·⑦)은 Foundry 무관하게 완결적.
+- 근거 문서: `docs/worklog/P7-foundry-migration.md` §11~§13(write 전량 배선·Anomaly dual-write·D-1
+  에러 흡수 실측), `aip-integration.md`, `ontology/store_foundry.py`(make_store·HybridStore).
+- **스텝 ③ confirm(로컬)**은 그대로 둔다 — 로컬 결정루프 서사가 이미 완결적이고, 스텝 ⑥에서 같은
+  confirm이 Foundry에도 영속됨을 실연하므로 이중으로 보인다(로컬 즉응 + Foundry 영속).
 
 ---
 
@@ -150,7 +178,7 @@ README 지표표 4항목 × (한 문장 + 화면 증거 + 수치).
 | 심사 항목 | 한 문장 | 화면 증거 | 수치 |
 |---|---|---|---|
 | **Problem Fit 25%** | 항적·위성·기상·뉴스가 흩어져 수작업 융합이 병목인 공중 상황인식을 정조준. | 스텝① 4소스가 한 지도·타임라인에 융합. | 소스 4종 동시 온톨로지 적재(OpenSky 83관측/Celestrak 2통과/METAR 1/GDELT 1). |
-| **Military Deployability 30%** | 온톨로지→결정→Action, KADIZ 라이브, 출처·신뢰도, 분석가 human-on-the-loop. | 스텝③ confirm 상태전이 + 스텝① provenance 배지 + Foundry 이관 준비. | 상태 전이 영속(후보→확인됨), 문장별 신뢰도 0~1 표기. |
+| **Military Deployability 30%** | 온톨로지→결정→Action, KADIZ 라이브, 출처·신뢰도, 분석가 human-on-the-loop, **실 Palantir Foundry 배포**. | 스텝③ confirm 상태전이 + 스텝① provenance 배지 + **스텝⑥ 실 Foundry 인제스트·이상징후·confirm 실연**. | 상태 전이 영속(후보→확인됨), 문장별 신뢰도 0~1, Foundry에 Aircraft/Observation/Anomaly + evidenced_by/observed_as 그래프 라이브 write. |
 | **Technical Execution 25%** | 온톨로지 융합 + AIP Logic형 이상탐지 5종 + citation 강제 + 지도/타임라인/서브그래프. | 스텝②/④ cites 배지·다중홉 서브그래프. | 탐지 5종 **P/R 1.00**(오탐 0), 문장 **11/11 인용**(무근거 0). |
 | **Creativity 20%** | ADS-B dropout(고의 소등 의심)·위성 근접·교차소스 "은닉 정황" 내러티브. | 스텝④ correlated_with 서브그래프(dropout↔위성↔뉴스). | 교차소스 상관 링크 영속, dropout 교차판정(단정/미확인 이분). |
 

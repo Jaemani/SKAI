@@ -258,11 +258,21 @@ class FoundryOntologyStore:
 
     @staticmethod
     def _is_already_exists(e: Exception) -> bool:
-        """ObjectAlreadyExists 계열 예외 판별 (dedup: 크래시 없이 skip용)."""
+        """ObjectAlreadyExists 계열 예외 판별 (dedup: 크래시 없이 skip용).
+
+        실 Foundry는 크로스런 PK 중복을 `ConflictError`로 던지고, errorName은 메시지 JSON에
+        `"errorName": "ObjectAlreadyExists"`로만 실린다(타입명은 ConflictError, 구분자 없는
+        연결형). 그래서 `already_exists`(밑줄)·`already exists`(공백)만 보던 기존 매칭이 실
+        예외를 놓쳐 write_aircraft/observation의 크로스런 dedup이 작동하지 않았다(재인제스트가
+        전부 실패). errorName 연결형 `objectalreadyexists`를 부분매칭에 추가한다.
+        주의: `LinkAlreadyExists`(create-anomaly 링크 tombstone)는 여기서 매칭하지 않는다 —
+        그건 객체 중복이 아니라 실패이므로 read-back 판정(§12) 경로로 흘러야 한다.
+        """
         name = type(e).__name__
         msg = str(e).lower()
         return (
             "ObjectAlreadyExists" in name
+            or "objectalreadyexists" in msg
             or "already_exists" in msg
             or "already exists" in msg
         )
