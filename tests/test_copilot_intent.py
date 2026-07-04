@@ -199,6 +199,40 @@ def test_count_target_and_filter_slots():
     assert classify("민간기만").slots["military"] is False
 
 
+def test_natural_language_origin_filter():
+    """'국적' 없이 국가명+항적 문맥 키워드로 origin_country 필터 발동(KADIZ-safe).
+
+    사용자 핵심 예시: "중국 쪽에서 온 기체 있어?"가 filter로 가야 한다.
+    "한국"/"대한민국"은 KADIZ 충돌 위험이 있어 기존처럼 "국적" 명시 필요.
+    """
+    # 중국 + 기체 문맥 → filter(China)
+    r = classify("중국 쪽에서 온 기체 있어?")
+    assert r.intent == INTENT_FILTER, f"예상 filter, 실제 {r.intent}"
+    assert r.slots.get("origin_country") == "China"
+
+    # 미국 + 항공기 문맥 → filter(United States)
+    r = classify("미국 항공기 있어?")
+    assert r.intent == INTENT_FILTER, f"예상 filter, 실제 {r.intent}"
+    assert r.slots.get("origin_country") == "United States"
+
+    # 일본 + 비행기 문맥 → filter(Japan)
+    r = classify("일본에서 온 비행기")
+    assert r.intent == INTENT_FILTER, f"예상 filter, 실제 {r.intent}"
+    assert r.slots.get("origin_country") == "Japan"
+
+    # 러시아 + 기체 + 몇 대 → count가 filter보다 먼저 발동(집계 마커 우선, 합리적)
+    r = classify("러시아 기체 몇 대?")
+    assert r.intent in (INTENT_COUNT, INTENT_FILTER), (
+        f"count 또는 filter 중 하나여야 함, 실제 {r.intent}"
+    )
+
+    # 한국 + 공역 → "국적" 없음, KADIZ 충돌 방지 → situation_summary
+    r = classify("한국 공역 이상한거")
+    assert r.intent == INTENT_SITUATION_SUMMARY, (
+        f"KADIZ 충돌: situation_summary 예상, 실제 {r.intent}"
+    )
+
+
 def test_focus_id_forces_entity():
     """선택 객체(focus_id)가 있으면 모호 질의도 entity_explain."""
     it = classify("이거 뭐야", focus_id="civ001")

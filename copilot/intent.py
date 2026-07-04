@@ -139,8 +139,9 @@ _DEMONSTRATIVE_PHRASES = (
     "이 기상",
 )
 
-# 국적(OpenSky origin_country 영문명) 별칭. "국적" 키워드와 함께일 때만 필터로 인정한다
-# (지역 별칭 "한국"과의 충돌 방지 — 국적 필터는 반드시 "국적" 명시가 있어야 발동).
+# 국적(OpenSky origin_country 영문명) 별칭.
+# "한국"/"대한민국"은 지역 별칭 KADIZ와 충돌 위험 → "국적" 키워드 명시 필수.
+# 그 외 국가는 "국적" 없이도 항적 문맥(_FLIGHT_CONTEXT_MARKERS)과 함께 발동.
 _ORIGIN_COUNTRY_ALIASES = {
     "미국": "United States",
     "중국": "China",
@@ -152,6 +153,19 @@ _ORIGIN_COUNTRY_ALIASES = {
     "대만": "Taiwan",
     "영국": "United Kingdom",
 }
+
+# KADIZ 지역 별칭 충돌 위험 → "국적" 명시 시에만 필터 발동.
+_KOREA_ALIASES: frozenset[str] = frozenset({"한국", "대한민국"})
+
+# 항적 문맥 키워드 — "국적" 명시 없이도 국가명과 함께 origin_country 필터를 발동시키는
+# 신호. "한국"/"대한민국"에는 적용하지 않는다(KADIZ 충돌 방지).
+_FLIGHT_CONTEXT_MARKERS = (
+    "기체",
+    "비행기",
+    "항공기",
+    "항적",
+    "에서 온",
+)
 
 # 근거 객체 id 패턴(질의문에 직접 박힌 id → entity_explain/why 대상). id에 하이픈이
 # 들어가므로(anomaly-{type}-{ac}-{win} 등) 하이픈을 포함해 전체 토큰을 잡는다.
@@ -211,12 +225,26 @@ def _count_target(low: str) -> str:
 
 
 def _origin_country(low: str) -> Optional[str]:
-    """ "국적" 키워드가 있을 때만 국적 별칭을 OpenSky origin_country 영문명으로 해소."""
-    if "국적" not in low:
-        return None
+    """국적 별칭을 OpenSky origin_country 영문명으로 해소.
+
+    - "한국"/"대한민국": KADIZ 지역 별칭 충돌 → "국적" 키워드 명시 필수.
+    - 그 외 국가(중국·미국 등): "국적" 명시 또는 항적 문맥(_FLIGHT_CONTEXT_MARKERS)
+      과 함께 발동. 둘 다 없으면 None → situation_summary 안전 폴백.
+    """
+    has_nationality_kw = "국적" in low
+    has_flight_ctx = any(m in low for m in _FLIGHT_CONTEXT_MARKERS)
+
     for alias, canonical in _ORIGIN_COUNTRY_ALIASES.items():
-        if alias in low:
-            return canonical
+        if alias not in low:
+            continue
+        if alias in _KOREA_ALIASES:
+            # KADIZ 지역 별칭 충돌 → "국적" 명시 필수
+            if has_nationality_kw:
+                return canonical
+        else:
+            # 그 외 국가: "국적" 명시 또는 항적 문맥 키워드 중 하나면 발동
+            if has_nationality_kw or has_flight_ctx:
+                return canonical
     return None
 
 
