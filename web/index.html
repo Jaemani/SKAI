@@ -610,16 +610,13 @@
     let lastAnomalies = [];
     let lastAssessment = null;
 
-    // ── 항공기 추측항법(dead reckoning) 애니메이션 상태 ──
-    // acMarkers[icao24] = { marker, basis, render:[lat,lon], trail:[], line, hdg, emerg, moving }
-    // basis = 마지막 관측 기준값(lat/lon/vel/hdg/ts/moving) → 매 프레임 예상위치 산출
-    let acMarkers = {};
+    // ── 항공기 방향(heading) 시각화 + 실시간 잔상 상태 (dead-reckoning 이동은 drTracks가 담당) ──
     let showTrail = true;
-    const MOVE_EPS = 1;        // m/s 이하(또는 on_ground) = 정지 취급, 방향 없음
-    const EASE_BASE = 0.16;    // 프레임당 위치 보정 계수(아래에서 프레임률 보정)
+    let trailsOn = false;      // 잔상 폴리라인이 화면에 있는지(정적 모드 진입 시 1회 정리 게이트)
+    const MOVE_EPS = 1;        // m/s 이하(또는 on_ground) = 정지 취급 → 방향 삼각형 대신 점
     const TRAIL_MS = 700;      // 잔상 샘플 주기(ms) — 매 프레임 아님(가벼움)
     const TRAIL_MAX = 10;      // 잔상 점 개수 상한(≈최근 7초)
-    let acRaf = null, acLastFrame = 0, acLastTrail = 0;
+    let acLastTrail = 0;
 
     async function getJSON(url) {
       const r = await fetch(url, { cache: "no-store" });
@@ -640,11 +637,12 @@
 
     // 이상징후 유형 메타 (P5 5종)
     const TYPE_LABEL = { emergency_squawk: "비상 스쿽", adsb_dropout: "ADS-B dropout",
-      loitering: "로이터링", military_approach: "군용기 접근", satellite_proximity: "위성 근접" };
+      loitering: "로이터링", military_approach: "군용기 접근", satellite_proximity: "위성 근접",
+      rapid_maneuver: "급기동" };
     const TYPE_ICON = { emergency_squawk: "🆘", adsb_dropout: "📡", loitering: "🌀",
-      military_approach: "🪖", satellite_proximity: "🛰" };
+      military_approach: "🪖", satellite_proximity: "🛰", rapid_maneuver: "⚡" };
     const TYPE_COLOR = { emergency_squawk: "#ff3b3b", adsb_dropout: "#ff9f43", loitering: "#feca57",
-      military_approach: "#ee5253", satellite_proximity: "#48dbfb" };
+      military_approach: "#ee5253", satellite_proximity: "#48dbfb", rapid_maneuver: "#a29bfe" };
     const STATUS_LABEL = { candidate: "후보", confirmed: "확인됨", dismissed: "기각됨" };
     const STATUS_COLOR = { candidate: "#ff3b3b", confirmed: "#c0392b", dismissed: "#6b7a8d" };
 
@@ -711,9 +709,18 @@
       const dLon = (dist * Math.sin(hr)) / (111320 * Math.cos(lat * Math.PI / 180));
       return [lat + dLat, lon + dLon];
     }
-    function acStyle(emerg) {
-      return { radius: 5, color: emerg ? "#ff3b3b" : "#7a5c00", weight: 1,
-        fillColor: emerg ? "#ff3b3b" : "#ffd166", fillOpacity: 0.95 };
+    // 이동 중(=방향 삼각형 표시) 판정: 지상·저속·방위없음이면 정지(점).
+    function acMoving(o) {
+      return !o.on_ground && o.velocity != null && o.velocity > MOVE_EPS && o.heading != null;
+    }
+    // 항공기 아이콘 = divIcon. 이동이면 heading 방향 삼각형(rotate), 정지면 점.
+    // 위치이동은 Leaflet translate3d(하드웨어 가속), 방향은 내부 삼각형 회전으로 분리.
+    function acIcon(o, emerg) {
+      const inner = acMoving(o)
+        ? '<i class="ac-tri" style="transform:rotate(' + Math.round(o.heading || 0) + 'deg)"></i>'
+        : '<i class="ac-dot"></i>';
+      return L.divIcon({ className: "ac-ico" + (emerg ? " emerg" : ""), html: inner,
+        iconSize: [16, 16], iconAnchor: [8, 8] });
     }
     function acTip(o) {
       return "<b>" + esc(o.callsign || o.icao24) + "</b>" +
@@ -732,14 +739,16 @@
         if (o.lat == null || o.lon == null) continue;
         seen.add(o.icao24);
         const emerg = ["7500", "7600", "7700"].includes(o.squawk);
+        const iconKey = (emerg ? "e" : "") + (acMoving(o) ? Math.round(o.heading || 0) : "·");
         let tr = drTracks.get(o.icao24);
         const cur = tr ? tr.marker.getLatLng() : null;   // 갱신 직전 표시위치
         if (!tr) {
-          const m = L.circleMarker([o.lat, o.lon], acStyle(emerg)).addTo(acLayer);
-          tr = { marker: m, corrLat: 0, corrLon: 0, corrStart: 0 };
+          const m = L.marker([o.lat, o.lon], { icon: acIcon(o, emerg), keyboard: false }).addTo(acLayer);
+          tr = { marker: m, corrLat: 0, corrLon: 0, corrStart: 0, iconKey, trail: [], line: null };
           drTracks.set(o.icao24, tr);
-        } else {
-          tr.marker.setStyle(acStyle(emerg));
+        } else if (tr.iconKey !== iconKey) {
+          tr.marker.setIcon(acIcon(o, emerg));   // 방위/비상/이동상태 변화 시에만 아이콘 교체(≈폴 주기)
+          tr.iconKey = iconKey;
         }
         tr.marker.bindTooltip(acTip(o));
         tr.obs = o;
@@ -755,9 +764,32 @@
         }
       }
       for (const [id, tr] of drTracks) {           // 이번 폴에서 사라진 항적 제거
-        if (!seen.has(id)) { acLayer.removeLayer(tr.marker); drTracks.delete(id); }
+        if (!seen.has(id)) {
+          acLayer.removeLayer(tr.marker);
+          if (tr.line) acTrailLayer.removeLayer(tr.line);
+          drTracks.delete(id);
+        }
       }
       document.getElementById("n-obs").textContent = obs.length;
+    }
+
+    // 실시간 잔상(comet tail) — 이동 중 마커의 최근 보간 위치를 짧게 이어 그림. Track 폴리라인(초록)과
+    // 색·길이로 구분(옅은 amber·최근 ~7초). 샘플은 TRAIL_MS 간격(매 프레임 아님).
+    function pushTrail(tr, lat, lon) {
+      tr.trail.push([lat, lon]);
+      if (tr.trail.length > TRAIL_MAX) tr.trail.shift();
+      if (tr.trail.length < 2) return;
+      if (!tr.line) tr.line = L.polyline(tr.trail, { color: "#ffd166", weight: 1.6, opacity: 0.32,
+        interactive: false, className: "ac-trail" }).addTo(acTrailLayer);
+      else tr.line.setLatLngs(tr.trail);
+      trailsOn = true;
+    }
+    function clearTrails() {
+      for (const tr of drTracks.values()) {
+        if (tr.line) { acTrailLayer.removeLayer(tr.line); tr.line = null; }
+        tr.trail = [];
+      }
+      trailsOn = false;
     }
 
     // 매 프레임 마커 위치 재계산 = 추측항법 외삽 + 보정 블렌드. 라이브일 때만 외삽.
@@ -765,6 +797,7 @@
       const t = nowServer();
       const nowMs = performance.now();
       const live = liveState.live === true && liveState.last_poll_ts != null;
+      const sample = live && showTrail && (nowMs - acLastTrail > TRAIL_MS);  // 잔상 샘플 틱
       for (const tr of drTracks.values()) {
         const o = tr.obs;
         if (!o) continue;
@@ -775,7 +808,10 @@
           else { const e = Math.pow(1 - p, 3); lat += tr.corrLat * e; lon += tr.corrLon * e; }
         }
         tr.marker.setLatLng([lat, lon]);
+        if (sample && acMoving(o)) pushTrail(tr, lat, lon);
       }
+      if (sample) acLastTrail = nowMs;
+      if (!live && trailsOn) clearTrails();   // 재생/정지 모드 = 정적(잔상 없음)
       requestAnimationFrame(animateTracks);
     }
     requestAnimationFrame(animateTracks);
@@ -888,6 +924,8 @@
       for (const a of anomalies) {
         const div = document.createElement("div");
         div.className = "anom-item st-" + a.status + (a.id === selectedId ? " sel" : "");
+        // 왼쪽 테두리 = 유형색(범례·지도 마커와 일치). 상태는 배지·흐림/취소선으로 구분.
+        div.style.borderLeftColor = TYPE_COLOR[a.type] || "#ff3b3b";
         const synth = a.attrs && a.attrs.is_synthetic ? ' <span class="badge b-synth">합성</span>' : "";
         const nCorr = (a.correlations || []).length;
         div.innerHTML =
@@ -1067,6 +1105,9 @@
 
     document.getElementById("tog-sat").addEventListener("change", (ev) => {
       showSat = ev.target.checked; drawOrbitPasses(lastPasses);
+    });
+    document.getElementById("tog-trail").addEventListener("change", (ev) => {
+      showTrail = ev.target.checked; if (!showTrail) clearTrails();
     });
 
     // ════════════════════════════════════════════════════════════
