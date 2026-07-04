@@ -22,40 +22,27 @@ from typing import Optional
 
 import httpx
 
-from ontology.model import NEWS_MAX_CONFIDENCE, KADIZ_REGION, NewsEvent
+from ontology.entity_linking import (  # 링킹 SSOT — 하위호환 재노출 포함
+    REGION_ALIASES,
+    match_region_aliases,
+)
+from ontology.model import KADIZ_REGION, NEWS_MAX_CONFIDENCE, NewsEvent
 from ontology.store_local import DEFAULT_DB, LocalOntologyStore
+
+# REGION_ALIASES·match_region_aliases는 ontology.entity_linking로 승격(gdelt·rss·stealthmole
+# 공용). 여기서는 재노출만 — 기존 `from connectors.gdelt import REGION_ALIASES`·G.match_region_aliases
+# 호출부(stealthmole·test_p3)를 깨지 않는다.
+__all__ = ["REGION_ALIASES", "match_region_aliases"]
 
 GDELT_URL = "https://api.gdeltproject.org/api/v2/doc/doc"
 TIMEOUT = 30
 
 GDELT_POLL_INTERVAL = 5 * 60  # architecture.md: 뉴스 5분
 GDELT_MIN_REQUEST_INTERVAL = 5.0  # P0A: 요청 간 최소 5초(코드 강제)
+GDELT_BASE_CONFIDENCE = 0.30  # 저신뢰 기준(링킹 매칭 시 소폭 상향, ≤0.4)
 DEFAULT_TIMESPAN = "7d"
 DEFAULT_MAXRECORDS = 15
 
-# 지역명 별칭 사전 (DR-0005: NER 대신 키워드 링킹). region_id → 별칭 리스트.
-REGION_ALIASES: dict[str, list[str]] = {
-    "KADIZ": [
-        "KADIZ",
-        "Korea Air Defense Identification Zone",
-        "한국방공식별구역",
-        "Korean air defense",
-        "South Korea air defense",
-        "Korea airspace",
-        # GDELT 쿼리가 한반도 공역으로 스코프됨 → 아래 일반 ADIZ 표현도 KADIZ로 링킹(실측 회수).
-        "air defense zone",
-        "defense identification zone",
-        "한반도",
-        "Korean Peninsula",
-        "서해",
-        "West Sea",
-        "Yellow Sea",
-        "동중국해",
-        "East China Sea",
-        "대한해협",
-        "Korea Strait",
-    ],
-}
 # GDELT 쿼리에 쓸 강한 키워드(영문 편향 → 영문 OR 조합, P0A).
 # 좁은 인용구(예: "Korea airspace")는 artlist에서 자주 null → 실측(2026-07-04)으로
 # KADIZ/한반도 공역 기사를 회수하는 조합으로 조정. mentions 링킹은 별도 별칭 사전이 담당.
@@ -91,14 +78,6 @@ def build_query(terms: Optional[list[str]] = None) -> str:
     """괄호로 감싼 OR 쿼리 문자열(P0A gotcha 5)."""
     terms = terms or _QUERY_TERMS
     return "(" + " OR ".join(f'"{t}"' for t in terms) + ")"
-
-
-def match_region_aliases(title: str) -> list[str]:
-    """제목에서 KADIZ 별칭 매칭(대소문자 무시) → 매칭된 별칭 리스트."""
-    if not title:
-        return []
-    low = title.lower()
-    return [a for a in REGION_ALIASES["KADIZ"] if a.lower() in low]
 
 
 def _parse_seendate(seendate: str, fallback_ts: int) -> int:
@@ -200,19 +179,17 @@ def fetch_articles(
 
 
 def ingest(store: LocalOntologyStore) -> tuple[int, int]:
-    """1 ingest 사이클: 괄호 OR 쿼리 1회 → NewsEvent + mentions 링크.
+    """1 ingest 사이클: 괄호 OR 쿼리 1회 → NewsEvent + 공용 링킹 mentions.
 
-    mentions→Region: 제목의 지역 별칭. mentions→Aircraft: DB 콜사인 exact match(교차검증).
-    쿼리는 1회만(GDELT는 1req/5s를 엄격 적용 — 버스트 시 429). 5초 규율은 fetch_articles가
-    호출마다 강제하며, 폴링 사이클(5분) 간에도 유지된다.
+    링킹은 entity_linking(공용 SSOT)이 담당 — mentions→Region(지역 별칭)·Operator(항공사/공군
+    사전)·Aircraft(콜사인/icao24 패턴 + **실존 대조**). 쿼리는 1회만(GDELT는 1req/5s를 엄격 적용
+    — 버스트 시 429). 5초 규율은 fetch_articles가 호출마다 강제하며 폴링 사이클(5분) 간에도 유지.
     반환: (NewsEvent write 수, mentions 링크 수).
     """
-    # DB 콜사인 → icao24 (엔티티 링킹 대상, exact match). 대문자 정규화.
-    callsign_to_icao = {
-        (ac.callsign or "").upper(): ac.icao24
-        for ac in store.query_aircraft()
-        if ac.callsign
-    }
+    from ontology import entity_linking
+
+    entity_linking.ensure_operator_seeds(store)
+    aircraft_index = entity_linking.build_aircraft_index(store)
 
     articles: dict[str, NewsEvent] = {}
     with httpx.Client() as client:
@@ -222,21 +199,11 @@ def ingest(store: LocalOntologyStore) -> tuple[int, int]:
 
     n_news = n_mentions = 0
     for nv in articles.values():
-        mentions: list[tuple] = []
-        if nv.entities:  # 지역 별칭 매칭 → mentions→Region
-            mentions.append(("Region", KADIZ_REGION.id))
-        # 제목에 DB 콜사인이 그대로 등장하면 → mentions→Aircraft(하드 소스 교차)
-        title_upper = nv.title.upper()
-        matched_ac = [
-            icao
-            for cs, icao in callsign_to_icao.items()
-            if cs and f" {cs} " in f" {title_upper} "
-        ]
-        for icao in matched_ac:
-            mentions.append(("Aircraft", icao))
-        # 지역+항공기 모두 매칭 시 소폭 상향(여전히 ≤ 0.4).
-        if nv.entities and matched_ac:
-            nv.confidence = min(0.4, nv.confidence + 0.05)
+        mentions = entity_linking.link_newsevent(
+            nv,
+            aircraft_index=aircraft_index,
+            base_confidence=GDELT_BASE_CONFIDENCE,
+        )
         store.write_newsevent(nv, mentions=mentions)
         n_news += 1
         n_mentions += len(mentions)

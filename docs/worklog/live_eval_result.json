@@ -1,0 +1,180 @@
+{
+  "generated_at": 1783175123,
+  "snapshot_now_anchor": 1783174315,
+  "collected": false,
+  "live_counts": {
+    "aircraft": 42,
+    "observation": 74,
+    "track": 42,
+    "region": 1,
+    "anomaly": 0,
+    "satellite": 84,
+    "orbitpass": 93,
+    "weatherstate": 1,
+    "newsevent": 0,
+    "operator": 0,
+    "assessment": 0,
+    "link": 334
+  },
+  "citation": {
+    "n_queries": 10,
+    "n_queries_with_evidence": 8,
+    "total_sentences": 24,
+    "total_cited_sentences": 24,
+    "sentence_cite_ratio": 1.0,
+    "total_cite_ids": 98,
+    "total_resolved": 98,
+    "cite_resolution_ratio": 1.0,
+    "per_query": [
+      {
+        "query": "지금 KADIZ 근방 상황 요약해줘",
+        "intent": "situation_summary",
+        "no_evidence": false,
+        "n_sentences": 3,
+        "n_cited_sentences": 3,
+        "n_cite_ids": 10,
+        "n_resolved": 10,
+        "unresolved": []
+      },
+      {
+        "query": "지금 KADIZ에 항적 몇 대야?",
+        "intent": "count",
+        "no_evidence": false,
+        "n_sentences": 1,
+        "n_cited_sentences": 1,
+        "n_cite_ids": 42,
+        "n_resolved": 42,
+        "unresolved": []
+      },
+      {
+        "query": "위성 통과 몇 건이야?",
+        "intent": "count",
+        "no_evidence": false,
+        "n_sentences": 1,
+        "n_cited_sentences": 1,
+        "n_cite_ids": 3,
+        "n_resolved": 3,
+        "unresolved": []
+      },
+      {
+        "query": "군용 추정 항적만 보여줘",
+        "intent": "filter",
+        "no_evidence": true,
+        "n_sentences": 0,
+        "n_cited_sentences": 0,
+        "n_cite_ids": 0,
+        "n_resolved": 0,
+        "unresolved": []
+      },
+      {
+        "query": "관심지역 기상 어때?",
+        "intent": "weather",
+        "no_evidence": false,
+        "n_sentences": 1,
+        "n_cited_sentences": 1,
+        "n_cite_ids": 1,
+        "n_resolved": 1,
+        "unresolved": []
+      },
+      {
+        "query": "최근 뉴스 맥락 있어?",
+        "intent": "news",
+        "no_evidence": true,
+        "n_sentences": 0,
+        "n_cited_sentences": 0,
+        "n_cite_ids": 0,
+        "n_resolved": 0,
+        "unresolved": []
+      },
+      {
+        "query": "지금 이상징후 있어?",
+        "intent": "situation_summary",
+        "no_evidence": false,
+        "n_sentences": 3,
+        "n_cited_sentences": 3,
+        "n_cite_ids": 10,
+        "n_resolved": 10,
+        "unresolved": []
+      },
+      {
+        "query": "최근 1시간 위성 통과랑 겹치는 이상징후는?",
+        "intent": "situation_summary",
+        "no_evidence": false,
+        "n_sentences": 3,
+        "n_cited_sentences": 3,
+        "n_cite_ids": 10,
+        "n_resolved": 10,
+        "unresolved": []
+      },
+      {
+        "query": "지금 떠 있는 민간기 목록 보여줘",
+        "intent": "filter",
+        "no_evidence": false,
+        "n_sentences": 9,
+        "n_cited_sentences": 9,
+        "n_cite_ids": 12,
+        "n_resolved": 12,
+        "unresolved": []
+      },
+      {
+        "query": "서해 상공 상황 브리핑해줘",
+        "intent": "situation_summary",
+        "no_evidence": false,
+        "n_sentences": 3,
+        "n_cited_sentences": 3,
+        "n_cite_ids": 10,
+        "n_resolved": 10,
+        "unresolved": []
+      }
+    ]
+  },
+  "detection": {
+    "now_anchor": 1783174315,
+    "determinism": {
+      "n_candidates_run1": 0,
+      "n_candidates_run2": 0,
+      "identical": true,
+      "candidates": []
+    },
+    "live_distribution": {
+      "total_anomalies": 0,
+      "by_type": {
+        "emergency_squawk": 0,
+        "adsb_dropout": 0,
+        "loitering": 0,
+        "military_approach": 0,
+        "satellite_proximity": 0
+      },
+      "confidence_by_type": {},
+      "dropout_cross_status": {
+        "confirmed": 0,
+        "unconfirmed": 0
+      }
+    }
+  },
+  "assessment_determinism": {
+    "query": "지금 KADIZ 근방 상황 요약해줘",
+    "n_sentences": 3,
+    "no_evidence": false,
+    "identical": true,
+    "confidence": 0.88
+  },
+  "bare_llm_comparison": {
+    "question": "지금 KADIZ 근방 상황 요약해줘",
+    "pipeline": {
+      "no_evidence": false,
+      "n_sentences": 3,
+      "n_cited_sentences": 3,
+      "n_machine_citations": 10,
+      "summary": "최근 30분(지금) 한국 방공식별구역 (KADIZ)에서 이상징후 0건·항적 42대를 확인했습니다."
+    },
+    "bare_llm": {
+      "ok": true,
+      "reason": "",
+      "output_chars": 716,
+      "n_machine_citations": 0,
+      "output_excerpt": "## KADIZ 근방 상황 요약\n\n**전반**: ADS-B 항적 42건, 한반도 내륙·서해·남해·대한해협 일대에 분포. 비상 스쿽(7500/7600/7700) **없음**. 전반적으로 정상 활동 수준.\n\n**주목 항적**:\n- **782027 @ (38.75, 123.90)** — 서해 최북단·최서단 항적. squawk 미송신 + 최신 관측시각 대비 약 5.5분 신호 공백. 민감 구역에서의 dropout 가능성이 있으나 **단일 소스(opensky) 결측이므로 단정 불가, 교차검증 필요**.\n- squawk=None 8건 중 6건은 (37.4~37.6, 126.4~126.8) 인천공항 인근에 밀집 — 지상/저고도 수신음영 개연성이 높아 이상징후로 보기 어려움.\n- 040262(인천 인근)도 ~5.5분 sta"
+    }
+  },
+  "elapsed_seconds": 49.3
+}

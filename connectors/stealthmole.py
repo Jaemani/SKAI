@@ -31,9 +31,13 @@ import httpx
 import jwt as pyjwt  # PyJWT
 from dotenv import load_dotenv
 
-from connectors.gdelt import REGION_ALIASES
+from ontology import entity_linking
+from ontology.entity_linking import REGION_ALIASES  # 링킹 SSOT
 from ontology.model import KADIZ_REGION, NEWS_MAX_CONFIDENCE, NewsEvent
 from ontology.store_local import DEFAULT_DB, LocalOntologyStore
+
+# SM 저신뢰 기준(교차검증 전). 링킹 매칭 시 소폭 상향(≤0.4)은 entity_linking이 처리.
+SM_BASE_CONFIDENCE = 0.25
 
 # ── 환경변수 ─────────────────────────────────────────────────────────────────
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -344,40 +348,39 @@ def fetch_lm(
 
 
 def ingest(store: LocalOntologyStore) -> dict[str, int]:
-    """1 ingest 사이클: GM·RM·LM 각 1호출(항공 키워드) → NewsEvent + mentions 링크.
+    """1 ingest 사이클: GM·RM·LM 각 1호출(항공 키워드) → NewsEvent + 공용 링킹 mentions.
 
-    각 모듈: 빈 쿼리로 최신 limit=20건. 지역 별칭 매칭 시 mentions→KADIZ Region.
+    각 모듈: 빈 쿼리로 최신 limit=20건. 링킹은 entity_linking(공용 SSOT) — mentions→Region
+    (지역 별칭)·Operator(항공사/공군 사전)·Aircraft(콜사인/icao24 + 실존 대조). 시작 시
+    오퍼레이터 시드 적재 + 실존 Aircraft 인덱스 구성(무존재 링크 방지).
     반환: {module: write_count, ...} 딕셔너리.
     """
     counts: dict[str, int] = {"gm": 0, "rm": 0, "lm": 0}
+    entity_linking.ensure_operator_seeds(store)
+    aircraft_index = entity_linking.build_aircraft_index(store)
+
+    def _write(nv: Optional[NewsEvent]) -> bool:
+        if nv is None:
+            return False
+        mentions = entity_linking.link_newsevent(
+            nv, aircraft_index=aircraft_index, base_confidence=SM_BASE_CONFIDENCE
+        )
+        store.write_newsevent(nv, mentions=mentions)
+        return True
 
     with httpx.Client() as client:
         # GM
         for record in fetch_gm(client):
-            nv = gm_record_to_news(record)
-            if nv is None:
-                continue
-            mentions = [("Region", KADIZ_REGION.id)] if nv.entities else []
-            store.write_newsevent(nv, mentions=mentions)
-            counts["gm"] += 1
-
+            if _write(gm_record_to_news(record)):
+                counts["gm"] += 1
         # RM (2초 간격은 _get 내 _rate_limit_guard가 자동 강제)
         for record in fetch_rm(client):
-            nv = rm_record_to_news(record)
-            if nv is None:
-                continue
-            mentions = [("Region", KADIZ_REGION.id)] if nv.entities else []
-            store.write_newsevent(nv, mentions=mentions)
-            counts["rm"] += 1
-
+            if _write(rm_record_to_news(record)):
+                counts["rm"] += 1
         # LM
         for record in fetch_lm(client):
-            nv = lm_record_to_news(record)
-            if nv is None:
-                continue
-            mentions = [("Region", KADIZ_REGION.id)] if nv.entities else []
-            store.write_newsevent(nv, mentions=mentions)
-            counts["lm"] += 1
+            if _write(lm_record_to_news(record)):
+                counts["lm"] += 1
 
     return counts
 
