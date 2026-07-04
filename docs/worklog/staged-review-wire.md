@@ -1,13 +1,16 @@
-# B2 Staged Human Review 배선 (방법 B) — 부분 완료 + Foundry 액션 수정 필요
+# B2 Staged Human Review 배선 (방법 B) — 완료 (Foundry 규칙 수정 후 플랫폼 레벨 성립)
 
 - 날짜: 2026-07-05
 - 담당: 실행 에이전트(opus). 종합·DR/CHANGELOG 반영은 메인(Fable).
 - 목표: aip-integration §0 "함수 출력이 staged human review 후 온톨로지 edit로 적용" 실증 —
   AIP 산출 explanation을 **본 속성에 즉시 쓰지 않고** 제안(proposedExplanation, reviewStatus=pending)
   → 사람 승인(explanation←proposed, approved) 2단계로 분리(방법 B). OSDK 0.11.0 재발행분 배선·검증.
-- **판정: 부분(PARTIAL).** 코드 배선은 완결·로컬 검증 통과, 그러나 **Foundry propose/approve-explanation
-  액션의 Modify 규칙이 잘못된 속성을 대상**으로 해 플랫폼(Foundry Object Explorer) 레벨의 ★핵심 불변식
-  ("pending 중 본 explanation 미변경")이 성립하지 않는다. 사용자 측 Foundry 규칙 수정 후 E2E 재실행 필요.
+- **판정(최종, §9): STAGED-OK.** §1~§8은 **규칙 수정 전** 기록이다(그 시점 판정=부분/PARTIAL —
+  코드는 올바른 계약대로 배선됐으나 Foundry propose/approve-explanation 액션의 Modify 규칙이 잘못된
+  속성을 대상으로 해 플랫폼 레벨 ★핵심 불변식 불성립). **사용자가 §7 지시대로 두 액션 규칙을 수정하고
+  OSDK를 재발행(0.11.0→0.12.0)한 뒤, §9 최종 E2E에서 Foundry Object Explorer 레벨의 ★핵심 불변식
+  ("pending 중 본 explanation 미변경 + proposedExplanation 채워짐", approve 복사, reject 보존)이
+  성립함을 실측 확인**했다. 코드는 무수정(파라미터 스키마 불변).
 
 ## 1. OSDK 0.11.0 introspection (실측)
 
@@ -108,16 +111,21 @@ create_anomaly(AIP 설명 산출) → propose → Foundry Anomaly 직독 → app
 - 결과: `.venv`(3.14 앱 스위트) **325 passed, 4 skipped**(기존 315 + 신규 10, 회귀 0). py_compile OK.
 - 라이브 E2E는 위 §3(스크립트 검증, 자동 스위트엔 미포함 — Foundry 쓰기라 gated).
 
-## 6. 정직 판정
+## 6. 정직 판정 (규칙 수정 후 갱신 — §9 반영)
 - **완결(코드):** 스키마 신규 속성 2 + 액션 3종을 실측 파라미터로 배선. 게이트·로컬 권위본 스테이징
   불변식·서버 승인/기각 엔드포인트·필드 노출 완료. **로컬(앱 read 경로) 스테이징은 검증 통과.**
-- **미완결(플랫폼):** Foundry `propose-explanation`·`approve-explanation`의 **Modify 규칙이 대상 속성을
-  잘못 잡아**(propose가 `proposedExplanation` 속성 대신 본 `explanation`에 씀; approve가 파라미터로 본
-  explanation을 덮어씀/지움) **Foundry Object Explorer 레벨의 ★핵심 불변식이 성립하지 않는다.**
-- 정확한 어필 문구(현 시점): "**스키마(proposedExplanation·reviewStatus)와 액션(propose/approve/reject)으로
-  staged review 워크플로를 구현**했고, **로컬 온톨로지 권위본에서 제안→승인 불변식(본 속성 미변경)을
-  실증**했다. **단 Foundry 액션의 Modify 규칙 수정 후에야 플랫폼(Object Explorer) 레벨에서 동일 불변식이
-  성립**한다." — "Foundry가 staged review를 강제한다"까지는 규칙 수정 전엔 과장.
+- **성립(플랫폼):** 사용자가 §7대로 `propose-explanation`·`approve-explanation`의 Modify 규칙을
+  수정한 뒤, **Foundry Object Explorer 레벨의 ★핵심 불변식이 성립한다**(§9 실측): propose는
+  `proposedExplanation` 속성에만 쓰고 본 `explanation`은 건드리지 않으며(pending 중 본 속성 미변경),
+  approve는 target만으로 저장된 `proposedExplanation`을 본 `explanation`으로 복사(+reviewStatus=approved),
+  reject는 본 explanation을 보존(+rejected). 코드는 무수정(파라미터 스키마 불변, OSDK 0.11.0→0.12.0).
+- 정확한 어필 문구(현 시점): "**스키마(proposedExplanation·reviewStatus)와 액션(propose/approve/reject)의
+  Modify 규칙으로 staged human review 워크플로를 구현**했고, **로컬 온톨로지 권위본과 Foundry 플랫폼
+  (Object Explorer) 양쪽에서 제안→승인/기각 불변식(승인 전 본 속성 미변경, 승인 시 복사, 기각 시 보존)을
+  실증**했다." — 얻은 이점: AIP가 산출한 서술이 사람 승인 전까지 본 explanation에 반영되지 않고
+  proposedExplanation에 스테이징돼, 플랫폼 레벨에서 human-on-the-loop가 강제된다(환각·오판 즉시반영 차단).
+  포장 주의: template 베이스라인은 **결정성/데모 재현성**을 위한 것이지 필수 종속이 아니며, 본
+  워크플로가 성립하는 곳은 propose/approve/reject **액션 3종 + 신규 속성 2**에 한정된다.
 
 ## 7. 사용자 측 Foundry 수정 지시 (E2E 통과를 위한 선결 조건)
 아래 두 액션의 Modify 규칙만 고치면 코드 무변경으로 §3 E2E가 ★핵심까지 통과한다:
@@ -136,3 +144,63 @@ create_anomaly(AIP 설명 산출) → propose → Foundry Anomaly 직독 → app
 - `server/app.py`: approve/reject-explanation 엔드포인트 2 + import + dict 필드 2 역편집.
 - `tests/test_staged_review.py` 삭제.
 - 온톨로지 스키마·기본 동작(게이트 off) 불변 → SKAI_REVIEW 미설정이면 기존 동작 그대로.
+
+## 9. 최종 E2E (규칙 수정 후) — **STAGED-OK**
+- 날짜: 2026-07-05. 실행 에이전트(opus). 사용자가 §7 지시대로 propose/approve-explanation Modify
+  규칙 수정 + OSDK 재발행(**0.11.0 → 0.12.0**). 코드 무수정(규칙 수정은 Modify 매핑만 바꾸고
+  파라미터·속성 스키마는 불변 → 코드 영향 없음이 정상이었고, 실측으로 확인).
+- 절차: 합성 스쿽(7700) → `create_anomaly(SKAI_STORE=foundry, SKAI_REVIEW=staged, SKAI_EXPLAINER=aip)`
+  → 내부 propose → approve/reject. 각 단계 저수준 dict SDK로 Foundry Anomaly **전 속성 직독**
+  (= Object Explorer가 보는 값). AIP explainer는 **라이브**(backend=`aip_logic`, 제안문이 template
+  베이스라인과 상이함을 실측 — string 폴백 아님).
+
+### 9-1. OSDK 0.12.0 introspection — 파라미터 불변 (§1-2 대비)
+재발행으로 버전만 오르고 staged review 3액션의 파라미터 시그니처는 §1-2와 **동일**:
+
+| 액션 | target | 그 외 파라미터 |
+|---|---|---|
+| `propose-explanation` | `anomaly`(object, req) | `proposedExplanation`(string, opt), `reviewStatus`(string, opt) |
+| `approve-explanation` | `anomaly`(object, req) | `proposedExplanation`(string, opt) |
+| `reject-explanation`  | `anomaly`(object, req) | (없음) |
+
+Anomaly 속성 실측: `explanation`·`proposedExplanation`·`reviewStatus` 전부 존재. → 규칙 수정은
+**속성/파라미터 스키마 불변, Modify 매핑만 교정** = 코드 무영향(무수정 원칙 유지 정당).
+
+### 9-2. 전이표 — Foundry Object Explorer 직독 (수정 전 §1-3 표와 대비)
+**approve 케이스** (anomaly=`…-e2eapp…`):
+
+| 단계(입력) | explanation(본 속성) | proposedExplanation | reviewStatus |
+|---|---|---|---|
+| create-anomaly (staged) | template 베이스라인 | None | None |
+| **propose-explanation** (AIP 산출 제안) | **template 베이스라인** ✓(불변) | **AIP 산출문** ✓(채워짐) | `pending` ✓ |
+| **approve-explanation** (target `anomaly`만) | **AIP 산출문** ✓(←proposed 복사) | AIP 산출문(유지) | `approved` ✓ |
+
+**reject 케이스** (anomaly=`…-e2erej…`):
+
+| 단계(입력) | explanation | proposedExplanation | reviewStatus |
+|---|---|---|---|
+| propose-explanation | template 베이스라인 | AIP 산출문 | `pending` |
+| **reject-explanation** (target `anomaly`만) | **template 베이스라인** ✓(보존) | AIP 산출문(유지) | `rejected` ✓ |
+
+**수정 전 §1-3 표 대비 (핵심 대조):**
+
+| 항목 | 수정 전(§1-3) | 수정 후(§9, 실측) |
+|---|---|---|
+| propose가 쓰는 곳 | ⚠️ 본 `explanation`(베이스라인 덮어씀); `proposedExplanation`은 고아 | ✓ `proposedExplanation` 속성; 본 `explanation` 불변 |
+| propose 후 pending 본 속성 | ⚠️ AIP 산출문(불변식 깨짐) | ✓ template 베이스라인(★불변식 성립) |
+| approve(target만) | ⚠️ 본 explanation을 null로 덮어써 **지워짐** | ✓ 저장된 `proposedExplanation`을 본 explanation으로 **복사** |
+| reject | ✓ 정상(보존) | ✓ 정상(보존) — 무변경 |
+
+### 9-3. ★핵심 불변식 판정
+- **pending 중 본 explanation 미변경** ✓ — create 시 template 베이스라인, propose 후에도 동일(둘 다 직독 일치).
+- **proposedExplanation 채워짐** ✓ — AIP 산출문(로컬 권위본 `proposed_explanation`과 Foundry 직독값 일치 = dual-write 정합).
+- **approve: explanation ← proposedExplanation 복사 + reviewStatus=approved** ✓ (target만 전달로 성립).
+- **reject: explanation 보존 + reviewStatus=rejected** ✓.
+→ **Foundry Object Explorer 레벨에서 스테이징 불변식 성립.** 로컬 권위본(앱 read 경로)과 플랫폼
+  스파인이 이제 일치한다. §6의 "규칙 수정 후에야 플랫폼 레벨 성립" 조건이 충족됨.
+
+### 9-4. 게이트 off 불변 + 정리
+- 게이트 off(SKAI_REVIEW 미설정) 기본 동작: 앱 테스트 스위트 `.venv`(3.14) **325 passed, 4 skipped**
+  (§5와 동일, 회귀 0). staged 배선이 기본 즉시-적용 경로를 건드리지 않음을 재확인.
+- 데모 자산 정리: 생성 PK 역순 delete-anomaly/observation/aircraft — **Anomaly 2 · Observation 2 ·
+  Aircraft 2 삭제, Foundry 잔여 0** 직독 확인(테스트 잔여물 없음).
