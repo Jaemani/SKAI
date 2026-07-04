@@ -81,6 +81,14 @@
 - 용도: 사건 맥락 보강(citation 소스). 신뢰도 낮게 가중.
 - 주의: 뉴스는 확증 아님 → 신뢰도 스코어 낮춤, 항적·궤도 등 하드 소스로 교차검증.
 
+### StealthMole (다크웹 OSINT) — 특수상황 트랙
+- 용도: 다크웹·딥웹 포럼, 텔레그램 공개채널의 공역·항공 관련 위협 언급 탐지. **저신뢰 증거**로 이상징후 맥락 보강(예: ADS-B dropout 시각대 다크웹 언급 교차).
+- 인증: `STEALTHMOLE_ACCESS_KEY` + `STEALTHMOLE_SECRET_KEY` → JWT 자동 생성(단일 키 아님). 키는 `~/SKAI/.env`에만(gitignore, 코드·문서 기재 금지).
+- 사용 모듈: **DT(darkweb)·TT(telegram 공개채널)·GM(government)**. `get_user_quotas()`로 허용 모듈·쿼터 확인. 리밋: DT 100건/요청, 연산자 최대 5개(OR 3개).
+- 응답 → NewsEvent 매핑: `source="stealthmole"`, `confidence=0.25`(교차검증 전).
+- **합법 가드레일**: CL/CDS/CB/UB(개인 크리덴셜·유출 계정 조회) **사용 금지**. 개인정보 포함 응답은 DB 적재 금지. 공개 채널·포럼 결과만. 산출은 상황인식까지.
+- 실측 여부: **키 수령 전(2026-07-04)** — REST 기반 URL·응답 필드·timestamp 포맷 미확인. 상세·검증 절차: `docs/worklog/stealthmole-recon.md` · 결정: DR-0010.
+
 ---
 
 ## 관심지역 시드 (데모 고정 후보)
