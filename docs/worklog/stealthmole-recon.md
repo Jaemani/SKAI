@@ -1,8 +1,16 @@
 # StealthMole API 정찰 보고서
 
 작성일: 2026-07-04  
-상태: 키 수령 전 — 공개 문서 기반 (호출 미시도)  
-목적: DR-0010 §4 "API 정찰" 단계 이행. connectors/stealthmole.py 설계 근거.
+상태: **매뉴얼 실측으로 정정됨(2026-07-04)** — 아래 §0 정정 우선. 원 본문은 공개 웹조사 기반이라 일부 오류.  
+목적: DR-0010 §4 "API 정찰" 단계 이행. connectors/stealthmole.py 설계 근거.  
+⚠️ **NDA**: 공식 매뉴얼은 공유 금지 문서. 엔드포인트·필드 상세는 **로컬 노트**(`stealthmole-manual-notes.md`, gitignore)에만. 이 문서엔 통합 설계 수준만.
+
+## 0. 매뉴얼 실측 정정 (공개 웹조사 대비)
+- **DT(Darkweb Tracker)·UB는 이번 해커톤 미제공** — §3 표가 DT를 주력으로 잡은 것은 **오류**. 실사용 불가.
+- **실사용 모듈 = GM(정부)·RM(랜섬웨어)·LM(기업)·TT(텔레그램 공개채널)**. GM/RM/LM은 동기 목록조회(쉬움), TT는 비동기 polling.
+- **인증 = access_key+secret_key JWT를 요청마다 생성**(HS256, nonce=uuid4, iat). 재사용 시 401. Base URL은 해커톤 전용 호스트.
+- 배제(개인정보) = CL·CDS·CB·CDF. 상세 스키마·쿼터는 로컬 노트 참조.
+- 아래 원 본문(§1~)의 DT 중심 서술은 위 정정으로 대체.
 
 ---
 

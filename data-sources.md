@@ -81,13 +81,14 @@
 - 용도: 사건 맥락 보강(citation 소스). 신뢰도 낮게 가중.
 - 주의: 뉴스는 확증 아님 → 신뢰도 스코어 낮춤, 항적·궤도 등 하드 소스로 교차검증.
 
-### StealthMole (다크웹 OSINT) — 특수상황 트랙
-- 용도: 다크웹·딥웹 포럼, 텔레그램 공개채널의 공역·항공 관련 위협 언급 탐지. **저신뢰 증거**로 이상징후 맥락 보강(예: ADS-B dropout 시각대 다크웹 언급 교차).
-- 인증: `STEALTHMOLE_ACCESS_KEY` + `STEALTHMOLE_SECRET_KEY` → JWT 자동 생성(단일 키 아님). 키는 `~/SKAI/.env`에만(gitignore, 코드·문서 기재 금지).
-- 사용 모듈: **DT(darkweb)·TT(telegram 공개채널)·GM(government)**. `get_user_quotas()`로 허용 모듈·쿼터 확인. 리밋: DT 100건/요청, 연산자 최대 5개(OR 3개).
+### StealthMole (OSINT 위협 모니터링) — 특수상황 트랙
+- 용도: 정부·기업·랜섬웨어 위협 게시글, 텔레그램 공개채널의 공역·항공 관련 언급을 **저신뢰 증거**로 이상징후 맥락 보강(예: ADS-B dropout 시각대 위협 언급 교차).
+- 인증: `STEALTHMOLE_ACCESS_KEY` + `STEALTHMOLE_SECRET_KEY` → **요청마다 JWT 생성**(HS256, 재사용 시 401). Base URL은 해커톤 전용. 키는 `~/SKAI/.env`에만(gitignore).
+- **사용 모듈(해커톤 제공 ∩ 가드레일 통과)**: **GM**(정부 위협)·**RM**(랜섬웨어)·**LM**(기업 위협)·**TT**(텔레그램 공개채널). ※ **DT(darkweb)·UB는 이번 해커톤 미제공**.
 - 응답 → NewsEvent 매핑: `source="stealthmole"`, `confidence=0.25`(교차검증 전).
-- **합법 가드레일**: CL/CDS/CB/UB(개인 크리덴셜·유출 계정 조회) **사용 금지**. 개인정보 포함 응답은 DB 적재 금지. 공개 채널·포럼 결과만. 산출은 상황인식까지.
-- 실측 여부: **키 수령 전(2026-07-04)** — REST 기반 URL·응답 필드·timestamp 포맷 미확인. 상세·검증 절차: `docs/worklog/stealthmole-recon.md` · 결정: DR-0010.
+- **합법 가드레일**: CL/CDS/CB/CDF(개인 크리덴셜·유출계정·감염기기·유출파일) **사용 금지**. 개인정보 포함 응답 DB 적재 금지. 산출은 상황인식까지.
+- ⚠️ **NDA**: 매뉴얼은 공유 금지 문서 → 엔드포인트·필드 상세는 **public 저장소 커밋 금지**. 상세 노트는 로컬 전용(`docs/worklog/stealthmole-manual-notes.md`, gitignore).
+- 결정: DR-0010.
 
 ---
 

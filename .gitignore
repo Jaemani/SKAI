@@ -13,6 +13,11 @@ data/
 .env
 *.token
 
+# StealthMole NDA 매뉴얼·상세 노트 (공유 금지 — public repo 커밋 절대 금지)
+*stealthmole*manual*
+*stealthmole*nda*
+docs/worklog/stealthmole-manual-notes.md
+
 # 개인 오케스트레이션 규칙 (팀 공유 금지)
 CLAUDE.local.md
 
