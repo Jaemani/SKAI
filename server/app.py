@@ -173,6 +173,9 @@ def api_observations() -> list[dict]:
                 "heading": o.heading,
                 "squawk": o.squawk,
                 "on_ground": o.on_ground,
+                # 군용 추정(저신뢰) — Aircraft.is_military는 라이브 ingest_cycle이 mil_enrich
+                # DB 플래그·콜사인 휴리스틱 히트 시 영속시킨 판정(단정 아님, 지도 시각 구분용).
+                "is_military": bool(ac.is_military) if ac else False,
                 # provenance — 모든 관측은 출처로 역추적 가능해야 한다.
                 "source": o.source,
                 "source_url": o.source_url,
@@ -199,6 +202,8 @@ def api_tracks() -> list[dict]:
                 "has_gap": t.has_gap,
                 "path": t.path,  # [[lat, lon], ...]
                 "n_points": len(t.path),
+                # 군용 추정(저신뢰) — /api/observations와 동일 필드(지도 트랙 툴팁 구분용).
+                "is_military": bool(ac.is_military) if ac else False,
             }
         )
     return out

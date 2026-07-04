@@ -62,6 +62,7 @@ from anomaly.actions import scan_and_create_all
 from anomaly.crosscheck import CrossCheckSource
 from anomaly.explainer import get_explainer
 from anomaly.mil_enrich import MilEnrichmentSource
+from anomaly.military_db import resolve_is_military
 from ontology.custody import rebuild_tracks
 from ontology.model import Aircraft, Observation
 from ontology.store_local import DEFAULT_DB, LocalOntologyStore
@@ -258,6 +259,8 @@ def ingest_cycle(
     반환: (처리 관측 수, 등장 항공기 수, 신규 Anomaly 수).
     """
     fetched_at = int(time.time())
+    # 사이클 시작 시점 스냅샷 — 기존 is_military 판정 보존(단조: 한 번 True면 계속 True)용.
+    ac_map_before = store.aircraft_map()
     n_obs = 0
     icaos: set[str] = set()
     for i, (lat, lon, dist) in enumerate(query_points):
@@ -267,6 +270,14 @@ def ingest_cycle(
         if data is None:  # 이 질의만 skip(다른 질의는 계속).
             continue
         for aircraft, obs in response_to_pairs(data, source_url, fetched_at):
+            # 군용 판정 영속 — opensky.ingest_cycle과 동일 규율(REPLACE라 안 실으면 소실).
+            existing = ac_map_before.get(aircraft.icao24)
+            aircraft.is_military = resolve_is_military(
+                existing.is_military if existing else False,
+                aircraft.icao24,
+                aircraft.callsign,
+                mil_enrich,
+            )
             store.write_aircraft(aircraft)
             store.write_observation(obs)  # provenance 강제 통과 시에만 저장
             # Aircraft —observed_as→ Observation (ontology.md §2)

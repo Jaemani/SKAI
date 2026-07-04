@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from typing import Optional
 
+from anomaly.mil_enrich import MilEnrichmentSource
+
 # 군 콜사인 프리픽스 → 설명(의미). 대문자, 콜사인 앞부분과 매칭.
 # 상용 항공사 콜사인과 충돌하지 않도록 보수적으로 수록(휴리스틱, 완전하지 않음).
 MILITARY_CALLSIGN_PREFIXES: dict[str, str] = {
@@ -102,3 +104,29 @@ def classify_military(
     if icao_match:
         return (True, _CONF_ICAO24, icao_match)
     return (False, 0.0, "")
+
+
+def resolve_is_military(
+    existing_is_military: bool,
+    icao24: Optional[str],
+    callsign: Optional[str],
+    mil_enrich: Optional[MilEnrichmentSource] = None,
+) -> bool:
+    """Aircraft.is_military에 **영속**시킬 종합판정(단조 — 한 번 True면 계속 True).
+
+    이상탐지(detect_military_approach)는 매 스캔마다 즉석 판정하지만, 지도가 항공기를
+    군용으로 구분하려면 Aircraft 레코드 자체에 판정이 남아야 한다(그래야 OpArea 밖 항적도
+    /api/observations에서 구분됨). write_aircraft가 INSERT OR REPLACE라 이 함수가 계산한
+    값을 매 write에 실어야 판정이 소실되지 않는다(호출측 ingest_cycle 책임).
+
+    우선순위: 기존 True(합성 주입·이전 판정) 불변 > mil_enrich 공개 DB 플래그
+    > 콜사인·대역 휴리스틱. detect_military_approach와 같은 신호원이지만 여긴 근거문구 없이
+    boolean만 낸다(근거는 이상탐지 쪽 signal.mil_reason이 이미 다룬다).
+    """
+    if existing_is_military:
+        return True
+    if mil_enrich is not None:
+        if mil_enrich.lookup(icao24 or "") is not None:
+            return True
+    is_mil, _, _ = classify_military(icao24, callsign)
+    return is_mil

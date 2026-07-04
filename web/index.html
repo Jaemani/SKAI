@@ -140,6 +140,7 @@
     #legend .l-sat { border-top: 3px dashed #38d9d9; }
     #legend .dotm { width: 11px; height: 11px; border-radius: 50%; flex: none; border: 1px solid #0008; }
     #legend .l-ac { background: #ffd166; } #legend .l-anom { background: #ff3b3b; }
+    #legend .l-mil { background: #9aa63c; }
     #legend .l-op { width: 13px; height: 9px; border-radius: 0; background: #7a4a12; border: 1px solid #ffa94d; }
     #legend .types { border-top: 1px solid var(--line-soft); margin-top: 6px; padding-top: 6px;
       display: flex; flex-wrap: wrap; gap: 4px 8px; }
@@ -182,6 +183,10 @@
       filter: drop-shadow(0 0 1.5px rgba(0,0,0,0.85)); }
     .ac-ico .ac-dot { width: 9px; height: 9px; border-radius: 50%; background: #ffd166;
       border: 1px solid rgba(0,0,0,0.55); box-shadow: 0 0 2px rgba(0,0,0,0.7); }
+    /* 군용 추정(저신뢰) 항적 — 민간 amber와 구분되는 올리브색. .emerg가 아래서 덮어써
+       비상 스쿽이 겹치면 그쪽을 우선 표시(안전신호가 군용 색보다 급함). 단정 아님(추정). */
+    .ac-ico.mil .ac-tri { border-bottom-color: #9aa63c; }
+    .ac-ico.mil .ac-dot { background: #9aa63c; }
     .ac-ico.emerg .ac-tri { border-bottom-color: #ff3b3b;
       filter: drop-shadow(0 0 3px rgba(255,59,59,0.9)); animation: acemerg 1.2s ease-in-out infinite; }
     .ac-ico.emerg .ac-dot { background: #ff3b3b; }
@@ -470,6 +475,7 @@
           </div>
           <div class="lg-body">
             <div class="lrow"><span class="dotm l-ac"></span>항공기(콜사인)</div>
+            <div class="lrow"><span class="dotm l-mil"></span>🪖 군용 추정 항적(저신뢰)</div>
             <div class="lrow"><span class="ln l-track"></span>트랙 경로</div>
             <div class="lrow"><span class="ln l-gap"></span>ADS-B gap 트랙</div>
             <div class="lrow"><span class="ln l-sat"></span>위성 지상궤적</div>
@@ -703,7 +709,8 @@
           color: gap ? "#ff6b6b" : "#35c26b", weight: gap ? 3 : 2, opacity: 0.85,
           dashArray: gap ? "6 6" : null,
         }).bindTooltip((t.callsign || t.icao24) + " · " + t.n_points + "점" +
-          (gap ? " · ⚠ ADS-B gap" : "")).addTo(trackLayer);
+          (gap ? " · ⚠ ADS-B gap" : "") +
+          (t.is_military ? " · 🪖 군용 추정(저신뢰)" : "")).addTo(trackLayer);
       }
       document.getElementById("n-track").textContent = tracks.length;
       document.getElementById("n-gap").textContent = gapCount;
@@ -747,11 +754,13 @@
       const inner = acMoving(o)
         ? '<i class="ac-tri" style="transform:rotate(' + Math.round(o.heading || 0) + 'deg)"></i>'
         : '<i class="ac-dot"></i>';
-      return L.divIcon({ className: "ac-ico" + (emerg ? " emerg" : ""), html: inner,
-        iconSize: [16, 16], iconAnchor: [8, 8] });
+      // 군용 색은 emerg보다 낮은 우선순위(CSS .emerg가 뒤에 선언돼 있어 겹치면 emerg가 이김).
+      const cls = "ac-ico" + (emerg ? " emerg" : "") + (o.is_military ? " mil" : "");
+      return L.divIcon({ className: cls, html: inner, iconSize: [16, 16], iconAnchor: [8, 8] });
     }
     function acTip(o) {
       return "<b>" + esc(o.callsign || o.icao24) + "</b>" +
+        (o.is_military ? " <span style='color:#c3cc6e'>🪖 군용 추정(저신뢰)</span>" : "") +
         (o.squawk ? " · sq " + esc(o.squawk) : "") +
         (o.alt != null ? "<br>고도 " + Math.round(o.alt) + " m" : "") +
         (o.velocity != null ? "<br>속도 " + Math.round(o.velocity) + " m/s" : "") +
@@ -776,7 +785,8 @@
         if (o.lat == null || o.lon == null) continue;
         seen.add(o.icao24);
         const emerg = ["7500", "7600", "7700"].includes(o.squawk);
-        const iconKey = (emerg ? "e" : "") + (acMoving(o) ? Math.round(o.heading || 0) : "·");
+        const iconKey = (emerg ? "e" : "") + (o.is_military ? "m" : "") +
+          (acMoving(o) ? Math.round(o.heading || 0) : "·");
         let tr = drTracks.get(o.icao24);
         const cur = tr ? tr.marker.getLatLng() : null;   // 갱신 직전 표시위치
         if (!tr) {
