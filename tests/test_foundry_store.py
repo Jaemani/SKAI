@@ -504,6 +504,36 @@ def test_write_observation_telemetry_included_when_set():
     assert params["squawk"] == "7700"
 
 
+def test_write_observation_within_kadiz_includes_region_id():
+    """KADIZ bbox 내부 관측 → regionId='KADIZ' 포함 (E-2.2 within 배선, §16)."""
+    store, _ = _make_foundry_store_with_mock()
+    calls: list[dict] = []
+    store._apply = lambda action, params: calls.append(dict(params)) or None
+
+    # KADIZ bbox: lat 32~39, lon 122~132 — (36.0, 124.0)은 내부
+    obs = _valid_obs(icao24="w-inside", ts=1_700_000_100)
+    obs.lat = 36.0
+    obs.lon = 124.0
+    store.write_observation(obs)
+
+    assert calls[0]["regionId"] == "KADIZ"
+
+
+def test_write_observation_outside_kadiz_omits_region_id():
+    """KADIZ bbox 외부 관측 → regionId 파라미터 생략 (required=False, E-2.2)."""
+    store, _ = _make_foundry_store_with_mock()
+    calls: list[dict] = []
+    store._apply = lambda action, params: calls.append(dict(params)) or None
+
+    # (0.0, 0.0)은 KADIZ 완전 외부
+    obs = _valid_obs(icao24="w-outside", ts=1_700_000_200)
+    obs.lat = 0.0
+    obs.lon = 0.0
+    store.write_observation(obs)
+
+    assert "regionId" not in calls[0]
+
+
 def test_write_observation_already_exists_no_crash():
     """ObjectAlreadyExists 예외 → 크래시 없이 skip."""
     store, _ = _make_foundry_store_with_mock()

@@ -62,7 +62,9 @@ import time
 from datetime import datetime, timezone
 from typing import Optional, Sequence
 
+from ontology.geo import point_in_bbox
 from ontology.model import (
+    KADIZ_BBOX,
     NEWS_MAX_CONFIDENCE,
     Aircraft,
     Anomaly,
@@ -103,6 +105,17 @@ ACTION_DISMISS_ANOMALY = "dismiss-anomaly"
 # P7 §9-4·§10-6 실측: 존재하지 않는 ref도 present-only로 EXECUTE 통과(링크는 안 맺힘). 권위 링크는
 # 로컬에 별도 저장하므로 이 placeholder는 "required 충족"만 담당하고 그래프 의미는 없다.
 _ABSENT_REF = "none"
+
+# KADIZ bbox 튜플(lamin, lomin, lamax, lomax) — geo.point_in_bbox 시그니처에 맞게 파생 변환.
+# SSOT는 model.KADIZ_BBOX(dict); 여기서 중복 정의 금지.
+_KADIZ_BBOX: tuple[float, float, float, float] = (
+    KADIZ_BBOX["lamin"],
+    KADIZ_BBOX["lomin"],
+    KADIZ_BBOX["lamax"],
+    KADIZ_BBOX["lomax"],
+)
+# Foundry Region PK (라이브 read 확인 — §16).
+_KADIZ_REGION_PK = "KADIZ"
 
 
 class FoundryUnsupportedError(NotImplementedError):
@@ -359,6 +372,10 @@ class FoundryOntologyStore:
             params["heading"] = float(obs.heading)
         if obs.squawk:
             params["squawk"] = obs.squawk
+        # KADIZ 지오펜스: bbox 안이면 regionId FK 포함 → Observation.region(within, E-2.2 배선).
+        # regionId=required=False(§15 introspection + §16 라이브 확인) — 밖이면 생략.
+        if point_in_bbox(obs.lat, obs.lon, _KADIZ_BBOX):
+            params["regionId"] = _KADIZ_REGION_PK
         try:
             self._apply(ACTION_CREATE_OBSERVATION, params)
             self._written_obs.add(obs.id)
