@@ -59,6 +59,8 @@ class FakeFoundry:
         self.assessments: list = []
         self.alerts: list[tuple] = []  # (region_id, level)
         self.deleted_passes: list[tuple] = []  # (satellite_ref, now_ts)
+        self.anomalies: list[tuple] = []  # (anomaly, evidence, involves)
+        self.anomaly_status: list[tuple] = []  # (anomaly_id, status)
 
     def write_aircraft(self, a: Aircraft) -> None:
         self.calls.append(("write_aircraft", a.icao24))
@@ -95,6 +97,14 @@ class FakeFoundry:
     def write_assessment(self, a) -> None:
         self.calls.append(("write_assessment", a.id))
         self.assessments.append(a)
+
+    def write_anomaly(self, anomaly, evidence, involves=()) -> None:
+        self.calls.append(("write_anomaly", anomaly.id))
+        self.anomalies.append((anomaly, tuple(evidence), tuple(involves)))
+
+    def set_anomaly_status(self, anomaly_id, status) -> None:
+        self.calls.append(("set_anomaly_status", anomaly_id))
+        self.anomaly_status.append((anomaly_id, status))
 
     def set_region_alert_level(self, region_id, level) -> None:
         self.calls.append(("set_region_alert_level", region_id))
@@ -238,15 +248,73 @@ def test_write_track_routes_to_foundry(hybrid):
     assert store.local.query_tracks() == []
 
 
-def test_write_anomaly_routes_to_local(hybrid):
-    """write_anomaly는 Foundry 미구현(D-1 미해소) → 로컬 권위본."""
+def test_write_anomaly_dual_write(hybrid):
+    """write_anomaly는 dual-write(P7 §12): 로컬 권위본 + Foundry 스칼라/엣지 스파인."""
     store, fake = hybrid
     anomaly = Anomaly(
         id="anomaly-1", type="emergency_squawk", ts=1_700_000_000, confidence=0.9
     )
     store.write_anomaly(anomaly, evidence=["abc123-1700000000"])
+    # 로컬 권위본
     assert [a.id for a in store.local.query_anomalies()] == ["anomaly-1"]
-    assert not fake.calls  # Foundry 미접촉
+    assert store.local.query_evidence("anomaly-1") == [
+        {"type": "Observation", "id": "abc123-1700000000"}
+    ]
+    # Foundry 스파인 dual-write
+    assert [a.id for a, _, _ in fake.anomalies] == ["anomaly-1"]
+
+
+def test_write_anomaly_empty_evidence_rejected_before_foundry(hybrid):
+    """빈 evidence는 EvidenceError로 거부(백엔드 무관) — Foundry 도달 전."""
+    from ontology.store import EvidenceError
+
+    store, fake = hybrid
+    anomaly = Anomaly(id="anomaly-x", type="emergency_squawk", ts=1, confidence=0.5)
+    with pytest.raises(EvidenceError):
+        store.write_anomaly(anomaly, evidence=[])
+    assert not fake.anomalies  # Foundry 미접촉
+    assert store.local.query_anomalies() == []  # 로컬도 미저장
+
+
+def test_write_anomaly_foundry_failure_keeps_local(hybrid):
+    """Foundry write_anomaly 예외는 흡수(경고) — 로컬 권위본은 남는다."""
+    store, fake = hybrid
+
+    def boom(anomaly, evidence, involves=()):
+        raise RuntimeError("read-back 실패 = 진짜 실패")
+
+    fake.write_anomaly = boom
+    anomaly = Anomaly(id="anomaly-2", type="loss_of_signal", ts=1, confidence=0.7)
+    store.write_anomaly(anomaly, evidence=["abc123-1"])  # 크래시 없어야
+    assert [a.id for a in store.local.query_anomalies()] == ["anomaly-2"]
+
+
+def test_set_anomaly_status_dual_transition(hybrid):
+    """confirm/dismiss 전이는 dual: 로컬 권위본(반환) + Foundry confirm/dismiss-anomaly 액션."""
+    store, fake = hybrid
+    anomaly = Anomaly(id="anomaly-3", type="emergency_squawk", ts=1, confidence=0.9)
+    store.write_anomaly(anomaly, evidence=["abc123-1"])
+    got = store.set_anomaly_status("anomaly-3", "confirmed")
+    # 로컬 권위본 전이·반환
+    assert got.status == "confirmed"
+    assert store.local.get_anomaly("anomaly-3").status == "confirmed"
+    # Foundry 동기 호출
+    assert ("anomaly-3", "confirmed") in fake.anomaly_status
+
+
+def test_set_anomaly_status_foundry_failure_keeps_local(hybrid):
+    """Foundry 전이 실패는 흡수 — 로컬 status는 확정·반환된다."""
+    store, fake = hybrid
+    anomaly = Anomaly(id="anomaly-4", type="emergency_squawk", ts=1, confidence=0.9)
+    store.write_anomaly(anomaly, evidence=["abc123-1"])
+
+    def boom(anomaly_id, status):
+        raise RuntimeError("confirm-anomaly 실패")
+
+    fake.set_anomaly_status = boom
+    got = store.set_anomaly_status("anomaly-4", "dismissed")
+    assert got.status == "dismissed"
+    assert store.local.get_anomaly("anomaly-4").status == "dismissed"
 
 
 # ── read 라우팅 ──────────────────────────────────────────────────────────────
@@ -680,6 +748,127 @@ def test_foundry_link_composed_of_edits_observation():
     assert p["Observation"] == "abc123-100"
     assert p["trackId"] == "track-1"  # composed_of FK
     assert p["newParameter"] == "abc123-100"  # obsId PK
+
+
+# ── P7 §12: write_anomaly 에러 흡수 + read-back 판정 (mock _pf) ───────────────
+def _anomaly(**kw):
+    base = dict(
+        id="anomaly-1",
+        type="emergency_squawk",
+        ts=1_700_000_000,
+        confidence=0.9,
+        status="candidate",
+        lat=36.5,
+        lon=124.5,
+        explanation="obs-grounded",
+    )
+    base.update(kw)
+    return Anomaly(**base)
+
+
+def _raise(exc_name="ApplyActionFailedError", msg="INVALID_ARGUMENT ApplyActionFailed"):
+    def _fn(action, params):
+        raise type(exc_name, (Exception,), {})(msg)
+
+    return _fn
+
+
+def test_write_anomaly_params_mapping():
+    """create-anomaly: observations=첫 근거(evidenced_by), newParameter=anomalyId, 스칼라·aircraft."""
+    store, calls = _capture_store()
+    store.write_anomaly(_anomaly(), evidence=["obs-a", "obs-b"], involves=["847114"])
+    assert len(calls) == 1
+    p = calls[0]["params"]
+    assert calls[0]["action"] == "create-anomaly"
+    assert p["observations"] == "obs-a"  # 첫 근거만 Foundry(단일 파라미터)
+    assert p["newParameter"] == "anomaly-1"  # anomalyId PK
+    assert p["confidence"] == 0.9
+    assert p["status"] == "candidate"
+    assert p["explanation"] == "obs-grounded"
+    assert p["aircraft"] == "847114"  # involves 첫 Aircraft
+    assert p["type"] == "emergency_squawk"
+
+
+def test_write_anomaly_empty_evidence_rejected_foundry():
+    """FoundryOntologyStore.write_anomaly도 빈 evidence는 EvidenceError(백엔드 무관)."""
+    from ontology.store import EvidenceError
+
+    store, calls = _capture_store()
+    with pytest.raises(EvidenceError):
+        store.write_anomaly(_anomaly(), evidence=[])
+    assert not calls  # _apply 미도달
+
+
+def test_write_anomaly_typed_evidence_only_skips_foundry():
+    """Observation 근거가 없고 타입드 근거(OrbitPass)만이면 Foundry 스킵(로컬 권위본)."""
+    store, calls = _capture_store()
+    store.write_anomaly(_anomaly(), evidence=[("OrbitPass", "pass-1")])
+    assert not calls  # create-anomaly 미호출(observations required 못 채움)
+
+
+def test_write_anomaly_absorbs_apply_action_failed():
+    """§12: create-anomaly가 ApplyActionFailed를 던져도 read-back 성공이면 흡수(예외 없음)."""
+    store, _ = _make_foundry_store_with_mock()
+    store._apply = _raise()
+    # read-back: 객체 존재 + evidenced_by 엣지 형성 모사(§12 무해 에러 동작)
+    store._get_object = lambda ot, pk: {"anomalyId": pk, "status": "candidate"}
+    store._traverse = lambda ot, pk, link: ["obs-a"]
+
+    store.write_anomaly(_anomaly(), evidence=["obs-a"])  # 크래시 없어야
+    assert "anomaly-1" in store._written_other.get("Anomaly", set())
+
+
+def test_write_anomaly_readback_object_missing_raises():
+    """read-back에서 객체가 미존재(진짜 실패)면 예외 전파."""
+    store, _ = _make_foundry_store_with_mock()
+    store._apply = _raise(msg="ApplyActionFailed")
+    store._get_object = lambda ot, pk: None  # 객체 미생성 = 진짜 실패
+    store._traverse = lambda ot, pk, link: []
+
+    with pytest.raises(Exception):
+        store.write_anomaly(_anomaly(), evidence=["obs-a"])
+    assert "anomaly-1" not in store._written_other.get("Anomaly", set())
+
+
+def test_write_anomaly_readback_edge_missing_raises():
+    """객체는 있으나 evidenced_by 엣지가 비면 실패 판정(half-Anomaly = 진짜 실패)."""
+    store, _ = _make_foundry_store_with_mock()
+    store._apply = _raise()
+    store._get_object = lambda ot, pk: {"anomalyId": pk}
+    store._traverse = lambda ot, pk, link: []  # 엣지 빈 채 → 실패
+
+    with pytest.raises(Exception):
+        store.write_anomaly(_anomaly(), evidence=["obs-a"])
+
+
+def test_write_anomaly_dedup_no_double_call():
+    """같은 anomalyId 두 번 write → 두 번째는 _apply 미호출(프로세스 내 dedup)."""
+    store, _ = _make_foundry_store_with_mock()
+    calls: list = []
+    store._apply = lambda action, params: calls.append(action) or None
+    an = _anomaly()
+    store.write_anomaly(an, evidence=["obs-a"])
+    store.write_anomaly(an, evidence=["obs-a"])
+    assert calls == ["create-anomaly"]
+
+
+def test_write_anomaly_already_exists_no_crash():
+    """ObjectAlreadyExists(크로스런) → 크래시 없이 skip + dedup 마킹."""
+    store, _ = _make_foundry_store_with_mock()
+    store._apply = _raise("ObjectAlreadyExistsError", "already exists")
+    store.write_anomaly(_anomaly(), evidence=["obs-a"])  # 크래시 없어야
+    assert "anomaly-1" in store._written_other.get("Anomaly", set())
+
+
+def test_set_anomaly_status_confirm_dismiss_actions():
+    """set_anomaly_status: confirmed→confirm-anomaly, dismissed→dismiss-anomaly, 그 외 no-op."""
+    store, calls = _capture_store()
+    store.set_anomaly_status("anomaly-1", "confirmed")
+    store.set_anomaly_status("anomaly-1", "dismissed")
+    store.set_anomaly_status("anomaly-1", "candidate")  # 전이 액션 없음 → no-op
+    assert [c["action"] for c in calls] == ["confirm-anomaly", "dismiss-anomaly"]
+    assert calls[0]["params"] == {"anomaly": "anomaly-1"}
+    assert calls[1]["params"] == {"anomaly": "anomaly-1"}
 
 
 # ── P7 §11: HybridStore 라우팅 (신규 7타입 + 링크 + 정리·전이) ────────────────
