@@ -7,7 +7,8 @@
 백엔드는 store 어댑터와 동일한 교체 패턴(DR-0004):
   TemplateExplainer   (기본)  결정적 설명문+신뢰도. LLM 없이 항상 동작 → 데모 재현성.
   ClaudeCliExplainer  (옵션)  `claude -p` 서술 강화. 실패/타임아웃 시 template 자동 폴백.
-  AipLogicExplainer   (스텁)  Foundry AIP Logic 개통 시 최종 이관 대상.
+  AipLogicExplainer   (개통)  Foundry AIP Logic 함수 explain-anomaly 실호출(설명+신뢰도를
+                             AIP가 생성). 크리덴셜/네트워크/함수 실패 시 template 자동 폴백.
 
 get_explainer()가 SKAI_EXPLAINER 환경변수로 백엔드 선택(기본 template).
 """
@@ -231,19 +232,150 @@ def explain_draft(draft) -> str:
 
 
 class AipLogicExplainer:
-    """스텁 — Foundry AIP Logic 개통 시 최종 이관 대상(DR-0004).
+    """Foundry AIP Logic 함수 `explain-anomaly`(OSDK 0.9.0 타입드 쿼리 `explainAnomaly`)를
+    실호출해 설명·신뢰도를 생성한다(DR-0004의 최종 이관 대상 — 개통 완료).
 
-    이관 순서: aip-integration.md의 AnomalyExplainer AIP Logic 함수가
-    candidate→설명·신뢰도를 생성하고, CreateAnomaly Action이 그 결과로 Anomaly 생성.
-    현재는 로컬에 AIP Logic 접근 경로가 없어(P0-B BLOCKED) NotImplementedError.
+    ## 호출 형태 (OSDK 0.9.0 실측)
+    `client.ontology.queries.explain_anomaly(evidence=<Observation|str>, anomaly_type=str,
+    region_name=str?, callsign=str?) -> ExplainAnomalyResponse(explanation, confidence,
+    recommendation)`. 응답은 beta StructType라 반드시 `AllowBetaFeatures()` 컨텍스트 안에서
+    호출한다(밖이면 BetaWarning 예외).
+
+    ## evidence = 온톨로지 객체 참조 (해자)
+    candidate.observation.id로 Foundry Observation **객체**를 fetch해 evidence로 넘긴다 →
+    AIP가 그 객체의 실제 속성(squawk·on_ground·lat/lon·alt·ts)을 온톨로지 위에서 읽어 추론한다
+    (단순 LLM 호출과의 차이). 객체가 Foundry에 없거나 조회 실패 시 관측 요약 **String**으로
+    폴백하되(함수 시그니처가 str도 허용) 그 한계를 backend 라벨에 명시한다.
+
+    ## confidence
+    ExplainerResult.confidence를 **AIP 응답값**으로 채운다 — 즉 이 백엔드에선 신뢰도도 AIP가
+    산출한다(template/claude가 룰 확정 신뢰도를 유지하는 것과의 차이. DR-0004의 "confidence=룰"
+    원칙에 대한 이 백엔드 한정 의도적 편차 — "AIP가 설명을 생성"을 사실로 만들기 위함).
+    함수 출력의 recommendation(권고)은 설명문 말미에 덧붙여 보존한다.
+
+    ## 폴백 (DR-0004 패턴 — 데모 안전)
+    크리덴셜 미설정·네트워크·타임아웃·함수 실패·빈 응답 등 어떤 예외든 TemplateExplainer로
+    폴백한다(backend="template(aip_logic 폴백)"). SDK는 lazy import(메인 .venv엔 OSDK 없음 —
+    store_foundry와 동일 규율)이며 SKAI_EXPLAINER=aip 명시 opt-in일 때만 이 경로를 탄다.
     """
 
     backend_name = "aip_logic"
 
+    def __init__(
+        self,
+        fallback: Optional[ExplainerBackend] = None,
+        timeout: int = 30,
+        client=None,
+    ):
+        self.fallback = fallback or TemplateExplainer()
+        self.timeout = timeout
+        self._client = client  # 주입 가능(테스트) — 없으면 첫 호출 시 lazy 생성.
+
     def explain(self, candidate: AnomalyCandidate) -> ExplainerResult:
-        raise NotImplementedError(
-            "AipLogicExplainer는 Foundry AIP Logic 개통 시 이관 대상(DR-0004, BLOCKED). "
-            "현재는 TemplateExplainer(기본) 또는 ClaudeCliExplainer(SKAI_EXPLAINER=claude) 사용."
+        try:
+            return self._call_aip(candidate)
+        except (
+            Exception
+        ) as e:  # 크리덴셜·네트워크·타임아웃·함수 실패 → template 폴백(데모 안전)
+            print(f"[explainer] aip-logic 실패 → template 폴백: {e!r}")
+            fb = self.fallback.explain(candidate)
+            return ExplainerResult(
+                explanation=fb.explanation,
+                confidence=fb.confidence,
+                backend="template(aip_logic 폴백)",
+            )
+
+    def _get_client(self):
+        """OSDK FoundryClient lazy 생성(메인 .venv엔 OSDK 없음 → 반드시 lazy import)."""
+        if self._client is None:
+            from foundry_sdk import Config, UserTokenAuth
+            from skai_osdk_sdk import FoundryClient
+
+            token = os.environ.get("FOUNDRY_TOKEN")
+            hostname = os.environ.get("FOUNDRY_HOSTNAME")
+            if not token or not hostname:
+                raise RuntimeError(
+                    "FOUNDRY_TOKEN·FOUNDRY_HOSTNAME 미설정 — AIP Logic 호출 불가(폴백)."
+                )
+            self._client = FoundryClient(
+                auth=UserTokenAuth(token=token),
+                hostname=hostname,
+                config=Config(timeout=self.timeout),
+            )
+        return self._client
+
+    def _resolve_evidence(self, client, candidate: AnomalyCandidate, facts: dict):
+        """evidence로 넘길 값 결정. 온톨로지 Observation 객체 우선, 실패 시 요약 String 폴백.
+
+        반환: (evidence_value, mode) — mode ∈ {"object", "string"}.
+        """
+        obs_id = candidate.observation.id
+        try:
+            obj = client.ontology.objects.Observation.get(obs_id)
+            if obj is not None:
+                return obj, "object"  # 온톨로지 위 추론(객체 참조)
+        except Exception as e:
+            print(
+                f"[explainer] Observation({obs_id}) 조회 실패 → String 근거 폴백: {e!r}"
+            )
+        # 객체 미존재/조회 실패 → 요약 String(함수가 str도 허용). 온톨로지 참조 아님(한계).
+        summary = (
+            f"obsId={obs_id} callsign={facts['callsign']} icao24={facts['icao24']} "
+            f"squawk={facts['squawk']}({facts['meaning']}) ts={facts['when']}Z "
+            f"pos=({facts['where']}) source={facts['source']}"
+        )
+        return summary, "string"
+
+    @staticmethod
+    def _allow_beta():
+        """explain-anomaly 응답이 beta StructType라 필요한 AllowBetaFeatures 컨텍스트.
+
+        OSDK 미설치 환경(메인 .venv·단위테스트)에선 foundry_sdk_runtime이 없어 null 컨텍스트로
+        강등(주입 fake client는 beta 게이팅 없음). 실 환경(.venv312)에선 진짜 컨텍스트를 쓴다.
+        """
+        try:
+            from foundry_sdk_runtime import AllowBetaFeatures
+
+            return AllowBetaFeatures()
+        except ImportError:
+            import contextlib
+
+            return contextlib.nullcontext()
+
+    def _call_aip(self, candidate: AnomalyCandidate) -> ExplainerResult:
+        client = self._get_client()
+        f = _facts(candidate)
+        evidence, mode = self._resolve_evidence(client, candidate, f)
+
+        kwargs: dict = {"evidence": evidence, "anomaly_type": candidate.type}
+        callsign = (
+            candidate.signal.get("callsign") or candidate.observation.aircraft_ref
+        )
+        if callsign:
+            kwargs["callsign"] = callsign
+        region = candidate.signal.get("region")
+        if region:
+            kwargs["region_name"] = region
+
+        # 응답이 beta StructType → AllowBetaFeatures 컨텍스트 필수(밖이면 BetaWarning 예외).
+        with self._allow_beta():
+            resp = client.ontology.queries.explain_anomaly(**kwargs)
+
+        explanation = (getattr(resp, "explanation", "") or "").strip()
+        if not explanation:
+            raise RuntimeError("AIP Logic explain-anomaly 빈 explanation")
+        rec = (getattr(resp, "recommendation", "") or "").strip()
+        if rec:
+            explanation = f"{explanation}\n권고: {rec}"
+        # confidence는 AIP 산출값(이 백엔드 한정) — 방어적으로 [0,1] 클램프.
+        conf = float(getattr(resp, "confidence", f["confidence"]))
+        conf = min(max(conf, 0.0), 1.0)
+        # String 근거로 폴백했으면 온톨로지 참조가 아님을 backend 라벨에 명시(정직).
+        backend = (
+            self.backend_name if mode == "object" else "aip_logic(string-evidence)"
+        )
+        return ExplainerResult(
+            explanation=explanation, confidence=conf, backend=backend
         )
 
 
