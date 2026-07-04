@@ -7,7 +7,8 @@ Operator·Track·Satellite·OrbitPass·WeatherState·NewsEvent·SituationAssessm
 self-link 해제) **write 배선이 가능**해졌다. 이 어댑터는 그 실측(P7 §10-7 B목록)을 코드로 옮긴다.
 
 - **FoundryOntologyStore**: Aircraft·Observation·Operator·Satellite·OrbitPass·Track·
-  WeatherState·NewsEvent를 Foundry에 write(create 액션)/read(저수준 SDK). SituationAssessment는
+  WeatherState·NewsEvent를 Foundry에 write(create 액션)/read(생성 OSDK 0.9.0 타입드 클래스, DR-0012
+  #4 — 구 저수준 dict SDK에서 전환). SituationAssessment는
   스칼라만 write(문장 cites는 스키마에 없음 → 로컬 권위본과 짝).
 - **HybridStore**: 위 8종 → Foundry(정보소재), Region·Anomaly·산출 인텔 문장·provenance
   MANY-MANY 링크 → LocalOntologyStore. `SKAI_STORE=foundry`로 활성화(미설정이면 순수 로컬).
@@ -225,11 +226,6 @@ def _warn(msg: str) -> None:
     print(f"[store_foundry] {msg}", file=sys.stderr)
 
 
-def _get(o, k):
-    """dict 또는 객체 어느 쪽이든 속성 접근(저수준 SDK 응답이 dict/타입드 혼재)."""
-    return o.get(k) if isinstance(o, dict) else getattr(o, k, None)
-
-
 def _first_ref_of_type(
     items: Sequence, default_type: str, want_type: str
 ) -> Optional[str]:
@@ -250,7 +246,16 @@ def _first_ref_of_type(
 
 
 class FoundryOntologyStore:
-    """Foundry 어댑터 (write=create 액션, read=저수준 SDK).
+    """Foundry 어댑터 (write=create 액션[저수준 _pf], read=OSDK 0.9.0 타입드 클래스).
+
+    ## read 경로 (DR-0012 #4 전환)
+    외부 read API(query_*·get_observation·counts)는 생성 OSDK(`skai_osdk_sdk` 0.9.0)의 타입드
+    ObjectSet를 경유한다: `client.ontology.objects.<Type>.get(pk)`/`.iterate()`/`.count()`. 속성은
+    dict.get가 아니라 타입드 어트리뷰트(snake_case: is_military·aircraft_icao24·attrs_json…). §17에서
+    신설된 속성(attrsJson·station·groundTrackJson·sentencesJson)도 전부 타입드 속성으로 노출됨(실측).
+    구 저수준 dict SDK read 사유(발행 OSDK가 stale·Observation 없음, P7 §4)는 0.9.0(11객체+36액션)
+    에서 소멸. write는 아래 `_pf`(저수준 Action.apply)를 그대로 유지(경로 무변경). 잔여 저수준 read는
+    write 내부 read-back 전용(_set_observation_track·delete·_anomaly_written_ok — 아래 §write-내부 참조).
 
     지원(Foundry 소재): Aircraft·Observation·Operator·Satellite·OrbitPass·Track·WeatherState·
     NewsEvent(객체) + SituationAssessment(스칼라 스파인). 그 밖의 Protocol 메서드는
@@ -276,8 +281,16 @@ class FoundryOntologyStore:
                 "(FoundryOntologyStore는 크리덴셜 필수)."
             )
         self.ont = ont_rid
+        # write = 저수준 _pf(Action.apply). DR-0012 범위(write 무변경) 밖이라 그대로 유지.
         self._pf = foundry_sdk.FoundryClient(
             auth=foundry_sdk.UserTokenAuth(token), hostname=hostname
+        )
+        # read = 생성 OSDK(skai_osdk_sdk 0.9.0) 타입드 클래스(DR-0012 #4). OSDK도 메인 .venv(3.14)엔
+        # 없어 lazy import(모듈 import 자체는 SDK 없이 통과해야 유닛 테스트 가능). rid는 온톨로지 고정.
+        import skai_osdk_sdk
+
+        self._osdk = skai_osdk_sdk.FoundryClient(
+            auth=foundry_sdk.UserTokenAuth(token), hostname=hostname, rid=ont_rid
         )
         # 프로세스 내 client-side dedup: 같은 세션 내 이중 write 방지.
         # 세션 간(크로스런) ObjectAlreadyExists는 write 메서드에서 catch·skip.
@@ -648,7 +661,21 @@ class FoundryOntologyStore:
                 _warn(f"delete-orbit-pass {pid} 실패: {e!r}")
         return deleted
 
-    # ── read (Foundry, 저수준 SDK dict→dataclass) ──
+    # ── read (Foundry, 생성 OSDK 0.9.0 타입드 클래스 — DR-0012 #4) ──
+    # 외부 read API(query_*·get_observation·counts)는 전부 OSDK 타입드 경유. 속성은 dict.get가
+    # 아니라 타입드 어트리뷰트(snake_case). ObjectSet API: `.get(pk)`·`.iterate()`·`.count()`.
+    def _osdk_iter(self, object_type: str):
+        """OSDK ObjectSet 전체를 타입드 객체로 지연 순회(제너레이터). object_type=OSDK API명."""
+        return getattr(self._osdk.ontology.objects, object_type).iterate()
+
+    def _osdk_get(self, object_type: str, pk: str):
+        """OSDK 타입드 단건 조회(PK) → 타입드 객체 or None(미존재)."""
+        return getattr(self._osdk.ontology.objects, object_type).get(pk)
+
+    # ── write-내부 저수준 read (경로 무변경, DR-0012 범위 밖) ──
+    # 아래 두 헬퍼는 write/정리 경로의 read-back 전용으로만 남긴다: _set_observation_track(edit-
+    # observation의 required 필드 재공급)·delete_future_orbitpasses_for(삭제 대상 스캔)·
+    # _anomaly_written_ok(Anomaly 존재확인). write 로직과 얽혀 있어 저수준 dict를 유지한다.
     def _list_objects(self, object_type: str) -> list[dict]:
         return list(self._pf.ontologies.OntologyObject.list(self.ont, object_type))
 
@@ -658,131 +685,140 @@ class FoundryOntologyStore:
         except Exception:
             return None
 
+    # ── OSDK 타입드 객체 → model dataclass 변환 (속성=snake_case 어트리뷰트) ──
     @staticmethod
-    def _dict_to_aircraft(d: dict) -> Aircraft:
+    def _obj_to_aircraft(o) -> Aircraft:
         return Aircraft(
-            icao24=d.get("icao24"),
-            callsign=d.get("callsign"),
-            registration=d.get("registration"),
-            operator_ref=d.get("operatorRef"),
-            type=d.get("type"),
-            is_military=bool(d.get("isMilitary")),
+            icao24=o.icao24,
+            callsign=o.callsign,
+            registration=o.registration,
+            operator_ref=o.operator_ref,
+            type=o.type,
+            is_military=bool(o.is_military),
         )
 
     @staticmethod
-    def _dict_to_obs(d: dict) -> Observation:
+    def _obj_to_obs(o) -> Observation:
         return Observation(
-            id=d.get("obsId"),
-            aircraft_ref=d.get("aircraftIcao24") or "",
-            ts=_iso_to_unix(d.get("ts")),
-            lat=d.get("lat"),
-            lon=d.get("lon"),
-            alt=d.get("alt"),
-            velocity=d.get("velocity"),
-            heading=d.get("heading"),
-            squawk=d.get("squawk"),
-            on_ground=bool(d.get("onGround")),
-            source=d.get("source") or "",
-            source_url=d.get("sourceUrl") or "",
-            # attrsJson(§17 신설) 우선 — 구 객체(속성 부재)는 {}로 폴백.
-            attrs=json.loads(d.get("attrsJson") or "{}"),
+            id=o.obs_id,
+            aircraft_ref=o.aircraft_icao24 or "",
+            ts=_iso_to_unix(o.ts),
+            lat=o.lat,
+            lon=o.lon,
+            alt=o.alt,
+            velocity=o.velocity,
+            heading=o.heading,
+            squawk=o.squawk,
+            on_ground=bool(o.on_ground),
+            source=o.source or "",
+            source_url=o.source_url or "",
+            # attrs_json(§17 신설) 우선 — 구 객체(속성 None)는 {}로 폴백.
+            attrs=json.loads(o.attrs_json or "{}"),
         )
 
     @staticmethod
-    def _dict_to_operator(d: dict) -> Operator:
+    def _obj_to_operator(o) -> Operator:
         return Operator(
-            id=d.get("operatorId"),
-            name=d.get("name"),
-            kind=d.get("kind"),
-            country=d.get("country"),
+            id=o.operator_id,
+            name=o.name,
+            kind=o.kind,
+            country=o.country,
         )
 
     @staticmethod
-    def _dict_to_satellite(d: dict) -> Satellite:
-        te = d.get("tleEpoch")
+    def _obj_to_satellite(o) -> Satellite:
+        te = o.tle_epoch
         return Satellite(
-            norad_id=d.get("noradId"),
-            name=d.get("name"),
-            operator_ref=d.get("operatorRef"),
-            object_type=d.get("objectType"),
-            tle_epoch=str(te) if te is not None else None,
+            norad_id=o.norad_id,
+            name=o.name,
+            operator_ref=o.operator_ref,
+            # ⚠️ OSDK는 objectType 속성을 object_type_(뒤 밑줄)로 노출 — object_type은 ObjectSet
+            #   클래스 attr과 충돌해 리네임됨.
+            object_type=o.object_type_,
+            # tleEpoch=timestamp → OSDK는 datetime 반환. 구 저수준 dict(ISO 문자열) 동작에 맞춰
+            #   datetime은 isoformat('T'), 그 외는 str.
+            tle_epoch=(
+                te.isoformat()
+                if isinstance(te, datetime)
+                else (str(te) if te is not None else None)
+            ),
             source="celestrak",
             source_url="",
         )
 
     @staticmethod
-    def _dict_to_orbitpass(d: dict) -> OrbitPass:
+    def _obj_to_orbitpass(o) -> OrbitPass:
         return OrbitPass(
-            id=d.get("passId"),
-            satellite_ref=d.get("satelliteNoradId") or "",
-            region_ref=d.get("regionId") or "",
-            start_ts=_iso_to_unix(d.get("startTs")),
-            end_ts=_iso_to_unix(d.get("endTs")),
-            max_elevation=d.get("maxElevation") or 0.0,
-            # groundTrackJson(§17 신설) 우선 — 구 객체(속성 부재)는 []로 폴백(지도 궤적 레이어).
-            ground_track=json.loads(d.get("groundTrackJson") or "[]"),
+            id=o.pass_id,
+            satellite_ref=o.satellite_norad_id or "",
+            region_ref=o.region_id or "",
+            start_ts=_iso_to_unix(o.start_ts),
+            end_ts=_iso_to_unix(o.end_ts),
+            max_elevation=o.max_elevation or 0.0,
+            # ground_track_json(§17 신설) 우선 — 구 객체(속성 None)는 []로 폴백(지도 궤적 레이어).
+            ground_track=json.loads(o.ground_track_json or "[]"),
             source="celestrak",
             source_url="",
         )
 
     @staticmethod
-    def _dict_to_track(d: dict) -> Track:
+    def _obj_to_track(o) -> Track:
         return Track(
-            id=d.get("trackId"),
-            aircraft_ref=d.get("aircraftIcao24") or "",
-            start_ts=_iso_to_unix(d.get("startTs")),
-            end_ts=_iso_to_unix(d.get("endTs")),
-            path=json.loads(d.get("pathJson") or "[]"),
-            has_gap=bool(d.get("hasGap")),
+            id=o.track_id,
+            aircraft_ref=o.aircraft_icao24 or "",
+            start_ts=_iso_to_unix(o.start_ts),
+            end_ts=_iso_to_unix(o.end_ts),
+            path=json.loads(o.path_json or "[]"),
+            has_gap=bool(o.has_gap),
         )
 
     @staticmethod
-    def _dict_to_weather(d: dict) -> WeatherState:
-        wid = d.get("weatherId")
-        wind_dir, wind_speed = _parse_wind(d.get("wind"))
-        cft = d.get("ceilingFt")
+    def _obj_to_weather(o) -> WeatherState:
+        wid = o.weather_id
+        wind_dir, wind_speed = _parse_wind(o.wind)
+        cft = o.ceiling_ft
         return WeatherState(
             id=wid,
-            region_ref=d.get("regionId") or "",
-            ts=_iso_to_unix(d.get("ts")),
-            # station(§17 신설) 우선 — 구 객체(속성 부재)는 weatherId PK에서 복원(폴백).
-            station=d.get("station") or _station_from_weather_id(wid),
+            region_ref=o.region_id or "",
+            ts=_iso_to_unix(o.ts),
+            # station(§17 신설) 우선 — 구 객체(속성 None)는 weatherId PK에서 복원(폴백).
+            station=o.station or _station_from_weather_id(wid),
             wind_dir=wind_dir,
             wind_speed_kt=wind_speed,
-            visibility_sm=d.get("visibilitySm"),
+            visibility_sm=o.visibility_sm,
             # ceilingFt sentinel(99999=무제한)은 다시 None으로 복원.
             ceiling_ft=None if cft is None or cft >= 99999 else int(cft),
-            flight_category=d.get("conditions"),
-            conditions=d.get("rawText") or "",
-            source=d.get("source") or "",
-            source_url=d.get("sourceUrl") or "",
+            flight_category=o.conditions,
+            conditions=o.raw_text or "",
+            source=o.source or "",
+            source_url=o.source_url or "",
             attrs={},
         )
 
     @staticmethod
-    def _dict_to_news(d: dict) -> NewsEvent:
+    def _obj_to_news(o) -> NewsEvent:
         return NewsEvent(
-            id=d.get("newsId"),
-            source=d.get("source") or "",
-            source_url=d.get("url") or "",
-            ts=_iso_to_unix(d.get("ts")),
-            title=d.get("title") or "",
-            summary=d.get("summary") or "",
-            lat=d.get("lat"),
-            lon=d.get("lon"),
-            confidence=d.get("confidence") or 0.0,
-            entities=json.loads(d.get("entitiesJson") or "[]"),
+            id=o.news_id,
+            source=o.source or "",
+            source_url=o.url or "",
+            ts=_iso_to_unix(o.ts),
+            title=o.title or "",
+            summary=o.summary or "",
+            lat=o.lat,
+            lon=o.lon,
+            confidence=o.confidence or 0.0,
+            entities=json.loads(o.entities_json or "[]"),
             attrs={},
         )
 
     def query_aircraft(self) -> list[Aircraft]:
-        return [self._dict_to_aircraft(d) for d in self._list_objects("Aircraft")]
+        return [self._obj_to_aircraft(o) for o in self._osdk_iter("Aircraft")]
 
     def aircraft_map(self) -> dict[str, Aircraft]:
         return {a.icao24: a for a in self.query_aircraft()}
 
     def query_all_observations(self, limit: Optional[int] = None) -> list[Observation]:
-        obs = [self._dict_to_obs(d) for d in self._list_objects("Observation")]
+        obs = [self._obj_to_obs(o) for o in self._osdk_iter("Observation")]
         obs.sort(key=lambda o: o.ts, reverse=True)
         return obs[:limit] if limit else obs
 
@@ -802,30 +838,30 @@ class FoundryOntologyStore:
         return list(latest.values())
 
     def get_observation(self, obs_id: str) -> Optional[Observation]:
-        d = self._get_object("Observation", obs_id)
-        return self._dict_to_obs(d) if d else None
+        o = self._osdk_get("Observation", obs_id)
+        return self._obj_to_obs(o) if o else None
 
     def query_operators(self) -> list[Operator]:
-        return [self._dict_to_operator(d) for d in self._list_objects("Operator")]
+        return [self._obj_to_operator(o) for o in self._osdk_iter("Operator")]
 
     def query_satellites(self) -> list[Satellite]:
-        return [self._dict_to_satellite(d) for d in self._list_objects("Satellite")]
+        return [self._obj_to_satellite(o) for o in self._osdk_iter("Satellite")]
 
     def satellite_map(self) -> dict[str, Satellite]:
         return {s.norad_id: s for s in self.query_satellites()}
 
     def query_orbitpasses(self) -> list[OrbitPass]:
-        passes = [self._dict_to_orbitpass(d) for d in self._list_objects("OrbitPass")]
+        passes = [self._obj_to_orbitpass(o) for o in self._osdk_iter("OrbitPass")]
         passes.sort(key=lambda p: p.start_ts)
         return passes
 
     def query_tracks(self) -> list[Track]:
-        return [self._dict_to_track(d) for d in self._list_objects("Track")]
+        return [self._obj_to_track(o) for o in self._osdk_iter("Track")]
 
     def query_weather_latest(self) -> list[WeatherState]:
         """공항(station)별 최신 기상 1건. station은 weatherId PK에서 복원해 그룹핑."""
         latest: dict[str, WeatherState] = {}
-        for w in (self._dict_to_weather(d) for d in self._list_objects("WeatherState")):
+        for w in (self._obj_to_weather(o) for o in self._osdk_iter("WeatherState")):
             key = w.station or w.id
             cur = latest.get(key)
             if cur is None or w.ts > cur.ts:
@@ -833,20 +869,26 @@ class FoundryOntologyStore:
         return list(latest.values())
 
     def query_news(self) -> list[NewsEvent]:
-        news = [self._dict_to_news(d) for d in self._list_objects("NewsEvent")]
+        news = [self._obj_to_news(o) for o in self._osdk_iter("NewsEvent")]
         news.sort(key=lambda n: n.ts, reverse=True)
         return news
 
     def counts(self) -> dict[str, int]:
+        # OSDK 타입드 집계(.count().compute()) — 서버측 count(전량 materialize 불요, float→int).
+        def _n(object_type: str) -> int:
+            return int(
+                getattr(self._osdk.ontology.objects, object_type).count().compute()
+            )
+
         return {
-            "aircraft": len(self._list_objects("Aircraft")),
-            "observation": len(self._list_objects("Observation")),
-            "operator": len(self._list_objects("Operator")),
-            "satellite": len(self._list_objects("Satellite")),
-            "orbitpass": len(self._list_objects("OrbitPass")),
-            "track": len(self._list_objects("Track")),
-            "weatherstate": len(self._list_objects("WeatherState")),
-            "newsevent": len(self._list_objects("NewsEvent")),
+            "aircraft": _n("Aircraft"),
+            "observation": _n("Observation"),
+            "operator": _n("Operator"),
+            "satellite": _n("Satellite"),
+            "orbitpass": _n("OrbitPass"),
+            "track": _n("Track"),
+            "weatherstate": _n("WeatherState"),
+            "newsevent": _n("NewsEvent"),
         }
 
     # ── 미배선 (Foundry 스키마 결함 — HybridStore가 로컬로 라우팅) ──
@@ -971,24 +1013,22 @@ class FoundryOntologyStore:
         return evidence_obs in self._traverse("Anomaly", anomaly_id, "observations")
 
     def _traverse(self, otype: str, pk: str, link: str) -> list[str]:
-        """저수준 SDK LinkedObject로 링크 대상 PK 목록(엣지 read-back용). 실패 시 빈 리스트."""
+        """OSDK 타입드 링크 accessor로 링크 대상 PK 목록(엣지 read-back용). 실패 시 빈 리스트.
+
+        유일 호출: _anomaly_written_ok의 Anomaly→observations(evidenced_by) read-back(§12 방어).
+        OSDK Anomaly.observations() 타입드 accessor로 전환(구 저수준 LinkedObject.list_linked_objects
+        대체). link 인자는 OSDK 링크 accessor 메서드명과 일치해야 한다(현재 "observations"만 사용).
+        """
         try:
-            objs = self._pf.ontologies.LinkedObject.list_linked_objects(
-                self.ont, otype, pk, link
-            )
+            obj = self._osdk_get(otype, pk)
+            if obj is None:
+                return []
+            linked = getattr(
+                obj, link
+            )()  # 예: Anomaly.observations() → ObservationObjectSet
+            return [o.get_primary_key() for o in linked.iterate()]
         except Exception:
             return []
-        out: list[str] = []
-        for o in objs:
-            pkv = (
-                _get(o, "__primaryKey")
-                or _get(o, "obsId")
-                or _get(o, "icao24")
-                or _get(o, "anomalyId")
-            )
-            if pkv:
-                out.append(pkv)
-        return out
 
     def set_anomaly_status(self, anomaly_id: str, status: str) -> None:
         """Anomaly status 전이를 Foundry에 반영(confirm/dismiss-anomaly, P7 §9-4·§10 정상 작동).

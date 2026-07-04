@@ -393,7 +393,10 @@ def test_make_store_foundry_returns_hybrid(tmp_path, monkeypatch):
     mock_sdk = MagicMock()
     mock_sdk.FoundryClient.return_value = MagicMock()
     mock_sdk.UserTokenAuth.return_value = MagicMock()
-    with patch.dict(sys.modules, {"foundry_sdk": mock_sdk}):
+    # OSDK(read)도 lazy import → mock 필요.
+    mock_osdk = MagicMock()
+    mock_osdk.FoundryClient.return_value = MagicMock()
+    with patch.dict(sys.modules, {"foundry_sdk": mock_sdk, "skai_osdk_sdk": mock_osdk}):
         store = make_store(str(tmp_path / "x.db"))
     assert isinstance(store, HybridStore)
 
@@ -461,6 +464,11 @@ def _make_foundry_store_with_mock():
     mock_client = MagicMock()
     mock_sdk.FoundryClient.return_value = mock_client
     mock_sdk.UserTokenAuth.return_value = MagicMock()
+    # read = OSDK(skai_osdk_sdk) 타입드 클래스(DR-0012 #4) → __init__이 lazy import하므로 mock 필요.
+    # write 매핑 테스트는 _apply를 별도 mock하므로 이 _osdk(MagicMock)는 건드리지 않는다. read 테스트는
+    # store._osdk를 FakeOsdk로 교체한다(아래 _foundry_store_with_fake_osdk).
+    mock_osdk = MagicMock()
+    mock_osdk.FoundryClient.return_value = MagicMock()
 
     captured: list[dict] = []
 
@@ -470,7 +478,7 @@ def _make_foundry_store_with_mock():
 
     mock_client.ontologies.Action.apply.side_effect = fake_apply
 
-    with patch.dict(sys.modules, {"foundry_sdk": mock_sdk}):
+    with patch.dict(sys.modules, {"foundry_sdk": mock_sdk, "skai_osdk_sdk": mock_osdk}):
         store = FoundryOntologyStore(token="t", hostname="h")
 
     return store, captured
@@ -1239,6 +1247,205 @@ def test_counts_merges_p3_foundry_counts(hybrid):
     counts = store.counts()
     assert counts["satellite"] == 1  # Foundry 카운트
     assert counts["region"] == 1  # 로컬 카운트
+
+
+# ── OSDK 타입드 read 전환 (FakeOsdk 주입, DR-0012 #4) ────────────────────────
+# FoundryOntologyStore.read는 이제 OSDK 타입드 ObjectSet 경유(_osdk_iter/_osdk_get + _obj_to_*).
+# 실 SDK·네트워크 없이 검증하려고 OSDK 타입드 객체·ObjectSet를 최소 흉내내 store._osdk에 주입한다.
+class _FakeObj:
+    """OSDK 타입드 객체 흉내 — snake_case 속성 접근 + get_primary_key()."""
+
+    def __init__(self, **attrs):
+        self.__dict__.update(attrs)
+
+    def get_primary_key(self):
+        return self._pk
+
+
+class _FakeCount:
+    def __init__(self, n):
+        self._n = n
+
+    def compute(self):
+        return float(self._n)  # OSDK .count().compute()는 float 반환
+
+
+class _FakeObjectSet:
+    def __init__(self, items, pk_attr):
+        self._items = items
+        self._pk_attr = pk_attr
+
+    def iterate(self):
+        return iter(self._items)
+
+    def get(self, pk):
+        return next((o for o in self._items if getattr(o, self._pk_attr) == pk), None)
+
+    def count(self):
+        return _FakeCount(len(self._items))
+
+
+class _FakeObjects:
+    def __init__(self, sets):
+        self._sets = sets
+
+    def __getattr__(self, name):
+        return self._sets.get(name, _FakeObjectSet([], "_pk"))
+
+
+class FakeOsdk:
+    """skai_osdk_sdk.FoundryClient 흉내 — client.ontology.objects.<Type> 만 제공."""
+
+    def __init__(self, sets):
+        self.ontology = type("O", (), {"objects": _FakeObjects(sets)})()
+
+
+def _store_with_fake_osdk(sets):
+    store, _ = _make_foundry_store_with_mock()
+    store._osdk = FakeOsdk(sets)
+    return store
+
+
+def test_osdk_typed_read_aircraft_and_obs():
+    """query_aircraft/all_observations/get_observation이 OSDK 타입드 속성(snake_case)으로 변환."""
+    from datetime import datetime, timezone
+
+    ac = _FakeObj(
+        icao24="847114",
+        callsign="FDA532",
+        registration="847114",
+        operator_ref=None,
+        type=None,
+        is_military=False,
+    )
+    obs = _FakeObj(
+        obs_id="847114-1700000000",
+        aircraft_icao24="847114",
+        # OSDK는 timestamp를 datetime으로 반환 → _iso_to_unix가 처리(라이브 실측).
+        ts=datetime(2023, 11, 14, 22, 13, 20, tzinfo=timezone.utc),
+        lat=36.0,
+        lon=124.0,
+        alt=9500.0,
+        velocity=210.0,
+        heading=270.0,
+        squawk="7700",
+        on_ground=False,
+        source="opensky",
+        source_url="https://x",
+        attrs_json='{"origin_country": "Republic of Korea"}',
+    )
+    store = _store_with_fake_osdk(
+        {
+            "Aircraft": _FakeObjectSet([ac], "icao24"),
+            "Observation": _FakeObjectSet([obs], "obs_id"),
+        }
+    )
+    got_ac = store.query_aircraft()
+    assert [a.icao24 for a in got_ac] == ["847114"]
+    assert got_ac[0].is_military is False
+    got = store.query_all_observations()
+    assert got[0].id == "847114-1700000000"
+    assert got[0].ts == 1_700_000_000  # datetime → unix (타입드 ts)
+    assert got[0].aircraft_ref == "847114"  # aircraft_icao24 snake_case 속성
+    # attrs_json(§17 신설) 타입드 속성 → attrs 역직렬화
+    assert got[0].attrs == {"origin_country": "Republic of Korea"}
+    # get(pk) 단건 + 미존재 None
+    one = store.get_observation("847114-1700000000")
+    assert one and one.aircraft_ref == "847114"
+    assert store.get_observation("nope") is None
+
+
+def test_osdk_typed_read_new_attrs_wired():
+    """§17 신설 속성(ground_track_json·station·object_type_)이 타입드 속성으로 노출·변환."""
+    from datetime import datetime, timezone
+
+    op = _FakeObj(
+        pass_id="p-1",
+        satellite_norad_id="25544",
+        region_id="KADIZ",
+        start_ts=1,
+        end_ts=2,
+        max_elevation=42.0,
+        ground_track_json="[[36.0, 124.0], [37.0, 125.0]]",
+    )
+    ws = _FakeObj(
+        weather_id="wx-RKSI-100",
+        region_id="KADIZ",
+        ts=100,
+        station="RKSI",
+        wind="200/8",
+        visibility_sm=6.0,
+        ceiling_ft=3000,
+        conditions="VFR",
+        raw_text="METAR RKSI",
+        source="aviationweather",
+        source_url="https://x",
+    )
+    sat = _FakeObj(
+        norad_id="25544",
+        name="ISS",
+        operator_ref="NASA",
+        object_type_="PAYLOAD",  # ⚠️ OSDK 리네임(뒤 밑줄)
+        tle_epoch=datetime(2026, 7, 4, tzinfo=timezone.utc),
+    )
+    store = _store_with_fake_osdk(
+        {
+            "OrbitPass": _FakeObjectSet([op], "pass_id"),
+            "WeatherState": _FakeObjectSet([ws], "weather_id"),
+            "Satellite": _FakeObjectSet([sat], "norad_id"),
+        }
+    )
+    assert store.query_orbitpasses()[0].ground_track == [[36.0, 124.0], [37.0, 125.0]]
+    w = store.query_weather_latest()[0]
+    assert w.station == "RKSI" and w.flight_category == "VFR"
+    s = store.query_satellites()[0]
+    assert s.object_type == "PAYLOAD"  # object_type_ 매핑
+    assert s.tle_epoch == "2026-07-04T00:00:00+00:00"  # datetime → isoformat('T')
+
+
+def test_osdk_typed_read_weather_station_pk_fallback():
+    """구 객체(station 속성 None)는 weatherId PK에서 station 복원(폴백 보존)."""
+    ws = _FakeObj(
+        weather_id="wx-RKSI-100",
+        region_id="KADIZ",
+        ts=100,
+        station=None,  # 구 객체 = 속성 부재
+        wind=None,
+        visibility_sm=None,
+        ceiling_ft=None,
+        conditions=None,
+        raw_text="",
+        source="x",
+        source_url="y",
+    )
+    store = _store_with_fake_osdk({"WeatherState": _FakeObjectSet([ws], "weather_id")})
+    assert store.query_weather_latest()[0].station == "RKSI"  # PK 복원 폴백
+
+
+def test_osdk_typed_counts_aggregation():
+    """counts는 OSDK .count().compute() 집계(float→int)."""
+    store = _store_with_fake_osdk(
+        {
+            "Aircraft": _FakeObjectSet([_FakeObj(icao24="a")], "icao24"),
+            "Observation": _FakeObjectSet(
+                [_FakeObj(obs_id="o1"), _FakeObj(obs_id="o2")], "obs_id"
+            ),
+        }
+    )
+    c = store.counts()
+    assert c["aircraft"] == 1 and c["observation"] == 2
+    assert isinstance(c["aircraft"], int)  # float→int 캐스팅
+    assert c["satellite"] == 0  # 빈 ObjectSet
+
+
+def test_traverse_uses_osdk_link_accessor():
+    """_traverse가 OSDK 타입드 링크 accessor(Anomaly.observations())로 PK 목록을 읽는다."""
+    linked = _FakeObjectSet([_FakeObj(_pk="obs-a"), _FakeObj(_pk="obs-b")], "_pk")
+    anomaly = _FakeObj(anomaly_id="anomaly-1", observations=lambda: linked)
+    store = _store_with_fake_osdk({"Anomaly": _FakeObjectSet([anomaly], "anomaly_id")})
+    assert store._traverse("Anomaly", "anomaly-1", "observations") == ["obs-a", "obs-b"]
+    # 미존재 PK → 빈 리스트(read-back 실패 판정 경로)
+    assert store._traverse("Anomaly", "missing", "observations") == []
 
 
 # ── 라이브 통합 (토큰 + foundry_sdk 있을 때만) ──────────────────────────────
