@@ -170,6 +170,24 @@
     @keyframes citering { 0%{stroke-width:2; fill-opacity:0.3; stroke-opacity:0.95}
       70%{stroke-width:10; fill-opacity:0; stroke-opacity:0} 100%{stroke-opacity:0} }
 
+    /* ── 항공기 마커 (추측항법 부드러운 이동 + heading 방향 삼각형) ──
+       divIcon = 위치는 Leaflet translate3d(하드웨어 가속), 방향은 내부 삼각형 회전.
+       마커 이동은 rAF에서 setLatLng만 호출(레이어 재생성 없음). */
+    .ac-ico { display: flex; align-items: center; justify-content: center; }
+    /* CSS 삼각형: 밑변 border만 색칠 → 위(북)를 향한 꼭짓점. rotate(heading°)로 방위 정렬(0=북·시계) */
+    .ac-ico .ac-tri { width: 0; height: 0;
+      border-left: 6px solid transparent; border-right: 6px solid transparent;
+      border-bottom: 13px solid #ffd166; transform-origin: 50% 50%;
+      filter: drop-shadow(0 0 1.5px rgba(0,0,0,0.85)); }
+    .ac-ico .ac-dot { width: 9px; height: 9px; border-radius: 50%; background: #ffd166;
+      border: 1px solid rgba(0,0,0,0.55); box-shadow: 0 0 2px rgba(0,0,0,0.7); }
+    .ac-ico.emerg .ac-tri { border-bottom-color: #ff3b3b;
+      filter: drop-shadow(0 0 3px rgba(255,59,59,0.9)); animation: acemerg 1.2s ease-in-out infinite; }
+    .ac-ico.emerg .ac-dot { background: #ff3b3b; }
+    @keyframes acemerg { 0%,100%{opacity:1} 50%{opacity:0.4} }
+    /* 실시간 잔상(comet tail) — 최근 보간 궤적. Track 폴리라인(초록)과 색·길이로 구분(옅은 amber·짧음) */
+    .ac-trail { pointer-events: none; }
+
     /* ── 우: 소스 · 기상 · 뉴스 (스택 섹션) ── */
     #right-rail .sec { border-bottom: 1px solid var(--line); }
     #right-rail .sec-hd { padding: 9px 13px; cursor: pointer; display: flex; align-items: center;
@@ -450,6 +468,7 @@
             <div class="types" id="type-legend"></div>
             <div class="togrow">
               <label class="tog"><input type="checkbox" id="tog-sat" checked /> 위성 궤적 표시</label>
+              <label class="tog"><input type="checkbox" id="tog-trail" checked /> 실시간 잔상</label>
             </div>
           </div>
         </div>
@@ -578,6 +597,7 @@
     let regionLayer = L.layerGroup().addTo(map);
     let trackLayer = L.layerGroup().addTo(map);
     let satLayer = L.layerGroup().addTo(map);
+    let acTrailLayer = L.layerGroup().addTo(map);     // 실시간 잔상(항공기 마커 아래)
     let acLayer = L.layerGroup().addTo(map);
     let evidenceLayer = L.layerGroup().addTo(map);   // 근거 흐름선/펄스
     let anomLayer = L.layerGroup().addTo(map);
@@ -589,6 +609,17 @@
     let anomMarkers = {};
     let lastAnomalies = [];
     let lastAssessment = null;
+
+    // ── 항공기 추측항법(dead reckoning) 애니메이션 상태 ──
+    // acMarkers[icao24] = { marker, basis, render:[lat,lon], trail:[], line, hdg, emerg, moving }
+    // basis = 마지막 관측 기준값(lat/lon/vel/hdg/ts/moving) → 매 프레임 예상위치 산출
+    let acMarkers = {};
+    let showTrail = true;
+    const MOVE_EPS = 1;        // m/s 이하(또는 on_ground) = 정지 취급, 방향 없음
+    const EASE_BASE = 0.16;    // 프레임당 위치 보정 계수(아래에서 프레임률 보정)
+    const TRAIL_MS = 700;      // 잔상 샘플 주기(ms) — 매 프레임 아님(가벼움)
+    const TRAIL_MAX = 10;      // 잔상 점 개수 상한(≈최근 7초)
+    let acRaf = null, acLastFrame = 0, acLastTrail = 0;
 
     async function getJSON(url) {
       const r = await fetch(url, { cache: "no-store" });
@@ -652,21 +683,102 @@
       document.getElementById("n-gap").textContent = gapCount;
     }
 
+    // ════════════════════════════════════════════════════════════
+    // 항적 추측항법(dead-reckoning) — 폴링 사이 마커를 실시간으로 이동
+    //   마지막 관측(위치·속도 m/s·방위°)에서 경과시간만큼 등속·직선 외삽.
+    //   새 관측 도착 시 현재 표시위치→새 예측위치로 짧게 보간(순간이동 제거).
+    // ════════════════════════════════════════════════════════════
+    const drTracks = new Map();   // icao24 → { marker, obs, corrLat, corrLon, corrStart }
+    const CORR_MS = 1200;         // 새 관측 도착 시 보정 블렌드 지속(ms)
+
+    function nowServer() {         // 서버 보정 벽시계(초)
+      return liveState.server_now
+        ? liveState.server_now + (Date.now() - liveState.recvAt) / 1000
+        : Date.now() / 1000;
+    }
+    // 외삽 허용 경과시간: coast 지평선 이내면 실경과, 초과(신호 소실)면 0(마지막 위치 고정).
+    // 관측의 절반 이상이 수 시간 stale인 실데이터에서 항적이 화면 밖으로 날아가는 것을 방지.
+    function drDt(rawDt) {
+      if (!(rawDt > 0)) return 0;
+      const coast = Math.max((liveState.interval || 25) * 2, 60);
+      return rawDt > coast ? 0 : rawDt;
+    }
+    // 등속·직선 외삽. heading 0°=북, 90°=동.
+    function project(lat, lon, heading, vel, dt) {
+      if (!vel || vel <= 0 || dt <= 0 || heading == null) return [lat, lon];
+      const dist = vel * dt, hr = heading * Math.PI / 180;
+      const dLat = (dist * Math.cos(hr)) / 111320;
+      const dLon = (dist * Math.sin(hr)) / (111320 * Math.cos(lat * Math.PI / 180));
+      return [lat + dLat, lon + dLon];
+    }
+    function acStyle(emerg) {
+      return { radius: 5, color: emerg ? "#ff3b3b" : "#7a5c00", weight: 1,
+        fillColor: emerg ? "#ff3b3b" : "#ffd166", fillOpacity: 0.95 };
+    }
+    function acTip(o) {
+      return "<b>" + esc(o.callsign || o.icao24) + "</b>" +
+        (o.squawk ? " · sq " + esc(o.squawk) : "") +
+        (o.alt != null ? "<br>고도 " + Math.round(o.alt) + " m" : "") +
+        (o.velocity != null ? "<br>속도 " + Math.round(o.velocity) + " m/s" : "") +
+        (o.heading != null ? " · 방위 " + Math.round(o.heading) + "°" : "") +
+        "<br><span style='color:#8aa'>" + esc(o.source) + "</span>";
+    }
+
+    // 관측 배열을 drTracks와 대조 갱신(clearLayers 대신 마커 지속 → rAF로 애니메이션)
     function drawAircraft(obs) {
-      acLayer.clearLayers();
+      const seen = new Set();
+      const t = nowServer();
       for (const o of obs) {
+        if (o.lat == null || o.lon == null) continue;
+        seen.add(o.icao24);
         const emerg = ["7500", "7600", "7700"].includes(o.squawk);
-        L.circleMarker([o.lat, o.lon], {
-          radius: 5, color: emerg ? "#ff3b3b" : "#7a5c00", weight: 1,
-          fillColor: emerg ? "#ff3b3b" : "#ffd166", fillOpacity: 0.95,
-        }).bindTooltip("<b>" + esc(o.callsign || o.icao24) + "</b>" +
-          (o.squawk ? " · sq " + esc(o.squawk) : "") +
-          (o.alt != null ? "<br>고도 " + Math.round(o.alt) + " m" : "") +
-          (o.velocity != null ? "<br>속도 " + Math.round(o.velocity) + " m/s" : "") +
-          "<br><span style='color:#8aa'>" + esc(o.source) + "</span>").addTo(acLayer);
+        let tr = drTracks.get(o.icao24);
+        const cur = tr ? tr.marker.getLatLng() : null;   // 갱신 직전 표시위치
+        if (!tr) {
+          const m = L.circleMarker([o.lat, o.lon], acStyle(emerg)).addTo(acLayer);
+          tr = { marker: m, corrLat: 0, corrLon: 0, corrStart: 0 };
+          drTracks.set(o.icao24, tr);
+        } else {
+          tr.marker.setStyle(acStyle(emerg));
+        }
+        tr.marker.bindTooltip(acTip(o));
+        tr.obs = o;
+        // 새 관측의 현재-시각 예측위치 대비 현재 표시위치 차이를 짧게 보간(스냅 제거).
+        if (cur) {
+          const [tlat, tlon] = project(o.lat, o.lon, o.heading, o.velocity, drDt(t - o.ts));
+          const dLat = cur.lat - tlat, dLon = cur.lng - tlon;
+          if (Math.abs(dLat) < 0.12 && Math.abs(dLon) < 0.12) {   // 정상 갱신 → 부드럽게 안착
+            tr.corrLat = dLat; tr.corrLon = dLon; tr.corrStart = performance.now();
+          } else {                                                // 신호 재획득 등 큰 점프 → 즉시 스냅
+            tr.corrLat = 0; tr.corrLon = 0; tr.corrStart = 0;
+          }
+        }
+      }
+      for (const [id, tr] of drTracks) {           // 이번 폴에서 사라진 항적 제거
+        if (!seen.has(id)) { acLayer.removeLayer(tr.marker); drTracks.delete(id); }
       }
       document.getElementById("n-obs").textContent = obs.length;
     }
+
+    // 매 프레임 마커 위치 재계산 = 추측항법 외삽 + 보정 블렌드. 라이브일 때만 외삽.
+    function animateTracks() {
+      const t = nowServer();
+      const nowMs = performance.now();
+      const live = liveState.live === true && liveState.last_poll_ts != null;
+      for (const tr of drTracks.values()) {
+        const o = tr.obs;
+        if (!o) continue;
+        let [lat, lon] = project(o.lat, o.lon, o.heading, o.velocity, live ? drDt(t - o.ts) : 0);
+        if (tr.corrStart) {
+          const p = (nowMs - tr.corrStart) / CORR_MS;
+          if (p >= 1) { tr.corrStart = 0; tr.corrLat = 0; tr.corrLon = 0; }
+          else { const e = Math.pow(1 - p, 3); lat += tr.corrLat * e; lon += tr.corrLon * e; }
+        }
+        tr.marker.setLatLng([lat, lon]);
+      }
+      requestAnimationFrame(animateTracks);
+    }
+    requestAnimationFrame(animateTracks);
 
     function drawOrbitPasses(passes) {
       satLayer.clearLayers();
