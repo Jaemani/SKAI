@@ -1,13 +1,15 @@
 #!/usr/bin/env python
-"""P7 — 하이브리드 이관 왕복 검증 (Aircraft·Observation·observed_as + 실데이터 1사이클).
+"""P7 — 하이브리드 이관 왕복 검증 (Aircraft·Observation·observed_as FK + 실데이터 1사이클).
 
 두 단계:
-  A. 왕복: 테스트 Aircraft(신규 속성 type·operatorRef·is_military=bool 포함) 1건 +
-     Observation(provenance) 1건 write → readback으로 필드 일치 확인 + observed_as 링크 시도.
+  A. 왕복: Aircraft(type·operatorRef·is_military) 1건 + Observation(provenance+FK) 1건 write
+     → readback 필드 일치 + observed_as FK 링크(query_observations_for) 1건 traverse 확인.
+     같은 사이클 재실행(dedup): ObjectAlreadyExists → skip, 크래시 없이 통과 확인.
   B. 실데이터: OpenSky 1회 호출(KADIZ bbox) → 상위 N건 서브샘플 → HybridStore(foundry)로
-     Aircraft·Observation write → Foundry 카운트 확인. 액션 호출 수 로깅.
+     Aircraft·Observation write(실 icao24 hex PK) → Foundry 카운트 확인. 액션 호출 수 로깅.
 
-쓰기 최소화: A=2건, B=Aircraft·Observation 각 N(기본 2)건. 시크릿 값 출력 금지.
+쓰기 최소화: A=Aircraft·Observation 각 1건(dedup로 2번째 skip), B=N(기본 2)건.
+시크릿 값 출력 금지.
 """
 
 import os
@@ -52,13 +54,16 @@ def main():
             print(f"  [WRITE FAIL] {label} → {name} ({first})")
             return False
 
-    banner("A. 왕복 검증 — Aircraft(신규 속성) + Observation(provenance) + observed_as")
+    banner(
+        "A. 왕복 검증 — Aircraft(신규 속성) + Observation(FK) + observed_as 링크 traverse"
+    )
     c0 = fs.counts()
     print(f"쓰기 전 Foundry 카운트: {c0}")
 
-    # A-1. Aircraft — icao24="p0test1" 요구(갭 1로 UUID 자동부여될 것) + 신규 속성 검증
+    # A-1. Aircraft — 실 icao24 hex를 PK로(§7-0: newParameter=icao24 바인딩)
+    test_icao = "p7t2test"
     test_ac = Aircraft(
-        icao24="p0test1",
+        icao24=test_icao,
         callsign="P7RT",
         registration="P7RT01",
         type="C-130",
@@ -67,11 +72,11 @@ def main():
     )
     safe_write(lambda: store.write_aircraft(test_ac), "A-1 create-aircraft")
 
-    # A-2. Observation — provenance(source/source_url/ts) Foundry 저장 확인용
+    # A-2. Observation — aircraftIcao24 FK로 observed_as 자동 형성(§7-2)
     now = int(time.time())
     test_obs = Observation(
-        id="p0test1-{}".format(now),
-        aircraft_ref="p0test1",
+        id="p7t2test-{}".format(now),
+        aircraft_ref=test_icao,
         ts=now,
         lat=36.5,
         lon=124.5,
@@ -84,38 +89,70 @@ def main():
     )
     safe_write(lambda: store.write_observation(test_obs), "A-2 create-observation")
 
-    # A-3. observed_as 링크 시도(갭 2로 드롭될 것 — 계측)
-    store.link("Aircraft", "p0test1", "observed_as", "Observation", test_obs.id)
+    # A-3. observed_as link() 호출 — no-op(FK 자동 형성), 크래시 없어야 함
+    store.link("Aircraft", test_icao, "observed_as", "Observation", test_obs.id)
+    print("  observed_as link() no-op 확인 OK (FK 자동 형성 — 별도 액션 불필요)")
 
     # readback
-    time.sleep(1.0)  # 안전용(OSV2는 즉시지만 소폭 여유)
-    ac_found = [a for a in fs.query_aircraft() if a.callsign == "P7RT"]
+    time.sleep(1.0)
+    ac_found = [a for a in fs.query_aircraft() if a.icao24 == test_icao]
     obs_found = [o for o in fs.query_all_observations() if o.source == "p7test"]
-    print("\n[readback] Aircraft(callsign=P7RT):")
+    print("\n[readback] Aircraft(icao24={}):".format(test_icao))
     for a in ac_found:
         print(
-            f"  icao24={a.icao24}  (요구 'p0test1' 아님 = 갭 1)  "
-            f"is_military={a.is_military}  type={a.type}  operator_ref={a.operator_ref}"
+            f"  icao24={a.icao24}  is_military={a.is_military}  "
+            f"type={a.type}  operator_ref={a.operator_ref}"
         )
     print("[readback] Observation(source=p7test):")
     for o in obs_found:
         print(
-            f"  obsId={o.id}  aircraft_ref={o.aircraft_ref!r}(빈값=갭2 링크불가)  "
+            f"  obsId={o.id}  aircraft_ref={o.aircraft_ref!r}  "
             f"ts={o.ts}  source={o.source}  source_url={'있음' if o.source_url else '없음'}"
         )
+
+    # observed_as FK 링크 traverse: query_observations_for(icao24) 1건 이상 확인
+    linked_obs = fs.query_observations_for(test_icao)
+    link_ok = len(linked_obs) > 0
+    print(
+        f"\n[observed_as FK traverse] query_observations_for({test_icao!r}): {len(linked_obs)}건 → {'OK' if link_ok else 'FAIL(FK 링크 미형성)'}"
+    )
+
     ac_ok = any(
-        a.is_military and a.type == "C-130" and a.operator_ref == "TESTAF"
-        for a in ac_found
+        a.icao24 == test_icao and a.is_military and a.type == "C-130" for a in ac_found
     )
     obs_ok = any(
-        o.source == "p7test" and o.source_url and o.ts == now for o in obs_found
+        o.source == "p7test"
+        and o.source_url
+        and o.ts == now
+        and o.aircraft_ref == test_icao
+        for o in obs_found
     )
     print(
-        f"\n왕복 판정: Aircraft 신규속성 {'OK' if ac_ok else 'FAIL'} / "
-        f"Observation provenance {'OK' if obs_ok else 'FAIL'}"
+        f"\n왕복 판정: Aircraft PK+속성 {'OK' if ac_ok else 'FAIL'} / "
+        f"Observation provenance+FK {'OK' if obs_ok else 'FAIL'} / "
+        f"observed_as FK traverse {'OK' if link_ok else 'FAIL'}"
     )
+
+    # A-4. dedup 검증 — 같은 사이클 재실행: ObjectAlreadyExists → skip, 크래시 금지
+    banner(
+        "A-4. dedup 검증 — 같은 Aircraft·Observation 재실행(ObjectAlreadyExists → skip)"
+    )
+    dedup_ac_ok = safe_write(
+        lambda: store.write_aircraft(test_ac), "A-4 dedup write_aircraft"
+    )
+    dedup_obs_ok = safe_write(
+        lambda: store.write_observation(test_obs), "A-4 dedup write_observation"
+    )
+    c_dedup = fs.counts()
+    # dedup 후 카운트가 증가하지 않아야 함
+    dedup_ok = c_dedup.get("aircraft", 0) == c0.get("aircraft", 0) + (
+        1 if ac_ok else 0
+    ) and c_dedup.get("observation", 0) == c0.get("observation", 0) + (
+        1 if obs_ok else 0
+    )
+    print(f"dedup 후 카운트: {c_dedup}")
     print(
-        f"observed_as 링크 드롭 수(계측): {fs.dropped_observed_as} (갭 2 — FK 미설정)"
+        f"dedup 판정: {'OK (카운트 불변)' if dedup_ok else 'WARN (카운트 변동 — dedup 확인 필요)'}"
     )
 
     banner(
@@ -140,14 +177,16 @@ def main():
         obs = mapping.event_to_observation(ev)
         action_calls += 1
         if safe_write(
-            lambda: store.write_aircraft(ac), f"B create-aircraft[{written_ac}]"
+            lambda _ac=ac: store.write_aircraft(_ac), f"B create-aircraft[{written_ac}]"
         ):
             written_ac += 1
         action_calls += 1
         if safe_write(
-            lambda: store.write_observation(obs), f"B create-observation[{written_obs}]"
+            lambda _obs=obs: store.write_observation(_obs),
+            f"B create-observation[{written_obs}]",
         ):
             written_obs += 1
+        # observed_as link() no-op — write_observation의 FK로 이미 형성됨
         store.link("Aircraft", ac.icao24, "observed_as", "Observation", obs.id)
         if action_calls >= SAMPLE_N * 2:
             break
@@ -166,21 +205,21 @@ def main():
         f"델타: aircraft +{c1['aircraft'] - c0['aircraft']}, "
         f"observation +{c1['observation'] - c0['observation']}"
     )
-    print(f"observed_as 링크 드롭 누계: {fs.dropped_observed_as} (전부 갭 2로 미생성)")
 
     banner("판정")
+    ingest_ok = not write_failures and ac_ok and obs_ok and link_ok
     if write_failures:
-        print("WRITE-BLOCKED — Foundry 액션 실행 실패로 쓰기 검증 불가:")
+        print("WRITE-BLOCKED — Foundry 액션 실행 실패:")
         for f in write_failures:
             print(f"  - {f}")
-        print(
-            "→ create-aircraft·create-observation이 ApplyActionFailed(갭 0). "
-            "Ontology Manager에서 액션 재구성 필요. read 경로는 정상."
-        )
     else:
-        print("WRITE-OK — Aircraft·Observation 쓰기/읽기 왕복 성공.")
+        print("INGEST-OK" if ingest_ok else "INGEST-PARTIAL")
+        print(f"  Aircraft PK+속성: {'OK' if ac_ok else 'FAIL'}")
+        print(f"  Observation provenance+FK: {'OK' if obs_ok else 'FAIL'}")
+        print(f"  observed_as FK traverse(1건): {'OK' if link_ok else 'FAIL'}")
+        print(f"  dedup(재실행): {'OK' if dedup_ok else 'WARN'}")
     print("\nDONE")
-    return 0
+    return 0 if ingest_ok else 1
 
 
 if __name__ == "__main__":

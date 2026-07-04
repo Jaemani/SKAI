@@ -1,41 +1,28 @@
 """FoundryOntologyStore + HybridStore — Foundry 하이브리드 저장 어댑터 (DR-0009).
 
 ## 무엇 (DR-0009 결정)
-Foundry 온톨로지는 현재 **Aircraft·Observation** Object Type만 구축돼 있다(나머지 9객체는
-UI 미구축). 그래서 전량 이관 대신 **하이브리드**로 간다:
+Foundry 온톨로지는 현재 **Aircraft·Observation·Region·Anomaly** Object Type이 구축돼 있다.
+전량 이관 대신 **하이브리드**로 간다:
 
 - **FoundryOntologyStore**: Aircraft·Observation을 Foundry에 write(액션)/read(저수준 SDK).
-- **HybridStore**: Aircraft·Observation·observed_as → Foundry, **나머지 전부 → LocalOntologyStore**.
+- **HybridStore**: Aircraft·Observation → Foundry, **나머지 전부 → LocalOntologyStore**.
   `SKAI_STORE=foundry`로 활성화(미설정이면 순수 로컬 — 데모 재현성 보존).
 
-## 왜 read=저수준 SDK인가 (P0B §8-3 "read=OSDK" 대비 변경)
-발행된 OSDK(`skai_osdk_sdk` 0.1.0)는 **Aircraft만 담긴 stale 스냅샷**이라(사용자 재발행
-이전분, Observation 클래스 없음) Observation을 못 읽는다. 재설치엔 private index URL이
-필요한데 `.env`엔 없다(앱 Overview 페이지 = 사용자측). 저수준 `foundry_sdk`(1.97.0)의
-`OntologyObject.list/get`은 **라이브 스키마를 dict로** 읽어 Aircraft·Observation 양쪽을
-스키마 변경마다 재발행 없이 읽는다 → 더 견고. 하이브리드의 정신(write=액션[human-on-the-loop],
-read=타입드 클라이언트)은 유지, read 클라이언트만 OSDK→저수준으로 바뀐다.
+## observed_as 링크 (P7 §7-2 확인)
+write_observation의 `aircraftIcao24` FK 파라미터로 **자동 형성**된다.
+별도 link() 호출 불필요 — HybridStore.link(observed_as)는 no-op.
 
-## ⚠️ 스키마 갭 (2026-07-04 실측 — 전부 Ontology Manager UI 수정 필요, 코드로 불가)
-0. **[BLOCKER] create-aircraft·create-observation 실행 자체가 실패**
-   (`ApplyActionFailed`, INVALID_ARGUMENT). VALIDATE_ONLY(파라미터 검증)는 통과하나
-   VALIDATE_AND_EXECUTE는 파라미터 조합 무관하게 실패. P0B(§8-3)에선 create-aircraft가
-   성공했으므로 **사용자의 최근 액션 편집 후 깨진 상태**. 원인 후보: (a) 어떤 속성에도
-   매핑 안 되는 고아 required 파라미터 newParameter/newParameter1, (b) 편집 중 icao24(PK)
-   자동생성 전략 손상. → **현재 Foundry 쓰기 전면 불가**(read는 정상). 액션 재구성 필요.
-1. **create-aircraft에 icao24(PK) 파라미터 없음** → (블로커 0 해소돼도) 서버가 icao24를
-   UUID로 자동부여. 엔티티 해소(같은 hex = 같은 Aircraft) 불가, write마다 새 Aircraft.
-2. **create-observation에 obsId(PK)·aircraftIcao24(FK) 파라미터 없음** →
-   - obsId 자동 UUID → 자연키(icao24-ts) dedup 불가.
-   - **aircraftIcao24를 못 넣어 observed_as 링크를 어떤 액션으로도 생성 불가** (FK 미설정).
-3. 두 create 액션에 UI 자동생성 **junk 필수 파라미터**(newParameter:string, newParameter1:bool).
-4. create-observation이 nullable 텔레메트리(alt/velocity/heading/squawk)도 required=True로 강제
-   → 결측값에 placeholder(0.0/"") 주입 필요(손실).
-5. Foundry Observation에 `attrs` 속성 없음 → model.attrs(origin_country 등)는 저장 안 됨.
+## read = 저수준 SDK (P0B §8-3 "read=OSDK" 대비 변경)
+저수준 `foundry_sdk`(1.97.0)의 `OntologyObject.list/get`으로 Aircraft·Observation 읽기.
+OSDK 0.3.0도 발행됐으나(Aircraft·Observation·Region·Anomaly Object + Action 12개)
+저수준 SDK는 재발행 없이 라이브 스키마를 dict로 읽어 더 견고.
 
-갭 0이 최우선 블로커(쓰기 불가). 그 뒤 1·2가 해소되기 전엔 Foundry는 **실 인제스트의 충실한
-백엔드가 못 된다**(dedup·링크·해소 전부 깨짐). 이 스토어는 그 위에서 "갭 해소 시 즉시 동작하는"
-스캐폴드이며(read는 지금도 동작), 갭이 UI에서 메꿔지는 대로 인터페이스 불변인 채 충실도가 오른다.
+## 스키마 잔여 이슈 (P7 §7 실측, Ontology Manager UI 대응 필요)
+1. `newParameter` 파라미터 오명명 — 기능은 PK 바인딩으로 정상이나 이름이 혼동스러움.
+   → icao24/obsId로 UI 리네임 권장(기능 영향 없음).
+2. Foundry Observation에 `attrs` 속성 없음 → model.attrs(origin_country 등) 저장 안 됨.
+3. Anomaly/Region write: evidence·confidence·status 파라미터 부재(§7-4) → 로컬 유지.
+4. Region: PK 바인딩 파라미터 없어 dedup 불가(자동 UUID).
 
 ## provenance
 write_observation은 백엔드 무관하게 store.validate_provenance로 source·source_url·ts를
@@ -71,10 +58,6 @@ DEFAULT_ONT_RID = "ri.ontology.main.ontology.33d94264-3352-4354-aadf-840ccb0f2a0
 # 액션 API name (2026-07-04 introspection).
 ACTION_CREATE_AIRCRAFT = "create-aircraft"
 ACTION_CREATE_OBSERVATION = "create-observation"
-
-# create-* 액션의 UI 자동생성 junk 필수 파라미터(갭 3). 값은 무의미하나 required라 채워야 함.
-_JUNK_STR = ""
-_JUNK_BOOL = False
 
 
 class FoundryUnsupportedError(NotImplementedError):
@@ -138,15 +121,10 @@ class FoundryOntologyStore:
         self._pf = foundry_sdk.FoundryClient(
             auth=foundry_sdk.UserTokenAuth(token), hostname=hostname
         )
-        # 프로세스 내 dedup(PK 자동 UUID라 서버 dedup 불가 — 갭 1·2 대응).
-        self._written_aircraft: dict[
-            str, str
-        ] = {}  # real icao24(hex) → foundry UUID pk
+        # 프로세스 내 client-side dedup: 같은 세션 내 이중 write 방지.
+        # 세션 간(크로스런) ObjectAlreadyExists는 write 메서드에서 catch·skip.
+        self._written_aircraft: dict[str, str] = {}  # icao24 → foundry pk
         self._written_obs: set[str] = set()  # obs.id(자연키)
-        # observed_as 링크 생성 시도 건수(FK 미설정으로 전부 드롭 — 갭 2 계측).
-        self.dropped_observed_as = 0
-        self._warned_uuid = False
-        self._warned_link = False
 
     # ── 내부: 액션 apply ──────────────────────────
     def _apply(self, action: str, parameters: dict):
@@ -163,71 +141,86 @@ class FoundryOntologyStore:
                     return pk
         return None
 
+    @staticmethod
+    def _is_already_exists(e: Exception) -> bool:
+        """ObjectAlreadyExists 계열 예외 판별 (dedup: 크래시 없이 skip용)."""
+        name = type(e).__name__
+        msg = str(e).lower()
+        return (
+            "ObjectAlreadyExists" in name
+            or "already_exists" in msg
+            or "already exists" in msg
+        )
+
     # ── write (Foundry) ───────────────────────────
     def write_aircraft(self, aircraft: Aircraft) -> None:
-        # 갭 1: icao24(PK) 파라미터 없음 → UUID 자동. 프로세스 내 dedup으로 중복 write 억제.
         if aircraft.icao24 in self._written_aircraft:
-            return
-        if not self._warned_uuid:
-            _warn(
-                "create-aircraft에 icao24 파라미터 없음 → Foundry가 PK를 UUID로 자동부여 "
-                "(엔티티 해소 불가, 갭 1). 원 icao24는 서버에 저장되지 않음."
-            )
-            self._warned_uuid = True
-        params = {
-            # required 파라미터: 결측 시 원 icao24(hex)로 폴백해 최소 추적성 유지.
+            return  # 프로세스 내 dedup
+        params: dict = {
             "callsign": aircraft.callsign or aircraft.icao24,
             "registration": aircraft.registration or aircraft.icao24,
             "isMilitary": bool(aircraft.is_military),
-            "newParameter": _JUNK_STR,
-            "newParameter1": _JUNK_BOOL,
+            # newParameter = icao24 PK 바인딩 (§7-0: UI 자동오명명, 기능은 PK 설정)
+            "newParameter": aircraft.icao24,
         }
         if aircraft.type:
             params["type"] = aircraft.type
         if aircraft.operator_ref:
             params["operatorRef"] = aircraft.operator_ref
-        pk = self._apply(ACTION_CREATE_AIRCRAFT, params)
-        self._written_aircraft[aircraft.icao24] = pk or ""
+        try:
+            pk = self._apply(ACTION_CREATE_AIRCRAFT, params)
+            self._written_aircraft[aircraft.icao24] = pk or aircraft.icao24
+        except Exception as e:
+            if self._is_already_exists(e):
+                # 크로스런 dedup: 같은 icao24가 이미 Foundry에 있음 → skip.
+                _warn(f"write_aircraft: {aircraft.icao24} 이미 존재 (skip)")
+                self._written_aircraft[aircraft.icao24] = aircraft.icao24
+            else:
+                raise
 
     def write_observation(self, obs: Observation) -> None:
         # provenance 강제(백엔드 무관) — 누락이면 ProvenanceError로 거부.
         validate_provenance(obs)
-        if (
-            obs.id in self._written_obs
-        ):  # 갭 2: 자연키 못 넣어 서버 dedup 불가 → 프로세스 dedup
-            return
-        params = {
+        if obs.id in self._written_obs:
+            return  # 프로세스 내 dedup
+        params: dict = {
             "sourceUrl": obs.source_url,
             "source": obs.source,
             "ts": _unix_to_iso(obs.ts),
             "lat": float(obs.lat),
             "lon": float(obs.lon),
-            # 갭 4: 아래 4개가 required=True → 결측은 placeholder(손실).
-            "alt": float(obs.alt) if obs.alt is not None else 0.0,
-            "velocity": float(obs.velocity) if obs.velocity is not None else 0.0,
-            "heading": float(obs.heading) if obs.heading is not None else 0.0,
-            "squawk": obs.squawk or "",
             "onGround": bool(obs.on_ground),
-            "newParameter": _JUNK_STR,
+            # newParameter = obsId PK 바인딩 (§7-0)
+            "newParameter": obs.id,
+            # aircraftIcao24 = FK → observed_as 링크 자동 형성 (§7-2)
+            "aircraftIcao24": obs.aircraft_ref,
         }
-        self._apply(ACTION_CREATE_OBSERVATION, params)
-        self._written_obs.add(obs.id)
-        # 갭 5: obs.attrs(origin_country 등)는 Foundry Observation에 속성이 없어 저장 안 됨.
+        # optional 텔레메트리: None이면 파라미터 생략 (§7-1 갭4 해소, required=False 확인됨).
+        if obs.alt is not None:
+            params["alt"] = float(obs.alt)
+        if obs.velocity is not None:
+            params["velocity"] = float(obs.velocity)
+        if obs.heading is not None:
+            params["heading"] = float(obs.heading)
+        if obs.squawk:
+            params["squawk"] = obs.squawk
+        try:
+            self._apply(ACTION_CREATE_OBSERVATION, params)
+            self._written_obs.add(obs.id)
+        except Exception as e:
+            if self._is_already_exists(e):
+                # 크로스런 dedup: 같은 obsId가 이미 Foundry에 있음 → skip.
+                _warn(f"write_observation: {obs.id} 이미 존재 (skip)")
+                self._written_obs.add(obs.id)
+            else:
+                raise
+        # 잔여 갭: obs.attrs(origin_country 등) Foundry Observation에 attrs 속성 없어 저장 안 됨.
 
     def link(
         self, src_type: str, src_id: str, link_type: str, dst_type: str, dst_id: str
     ) -> None:
-        # observed_as = Aircraft→Observation. Foundry에선 FK(aircraftIcao24) 링크지만
-        # create/edit-observation이 그 FK를 파라미터로 안 받아(갭 2) 어떤 액션으로도 생성 불가.
-        # → 드롭 + 계측(크래시 대신, 인제스트 루프가 멈추지 않게). 갭 해소 전까지의 한계.
+        # observed_as: write_observation의 aircraftIcao24 FK로 자동 형성(§7-2) → no-op.
         if link_type == "observed_as":
-            self.dropped_observed_as += 1
-            if not self._warned_link:
-                _warn(
-                    "observed_as 링크 생성 불가 — create-observation이 aircraftIcao24(FK)를 "
-                    "파라미터로 받지 않음(갭 2). 링크 드롭(계측: dropped_observed_as)."
-                )
-                self._warned_link = True
             return
         raise FoundryUnsupportedError(
             f"FoundryOntologyStore.link: {link_type}는 Foundry 미지원 "
@@ -279,7 +272,7 @@ class FoundryOntologyStore:
         return obs[:limit] if limit else obs
 
     def query_observations_for(self, icao24: str) -> list[Observation]:
-        # 갭 2: aircraftIcao24가 미설정(FK 못 넣음)이라 대개 매칭 0 — 링크 없는 관측.
+        # aircraftIcao24 FK가 write_observation에서 설정되므로 FK 필터가 정상 동작함.
         return sorted(
             (o for o in self.query_all_observations() if o.aircraft_ref == icao24),
             key=lambda o: o.ts,
@@ -314,12 +307,19 @@ class FoundryOntologyStore:
         )
 
     def write_region(self, region: Region) -> None:
+        # Foundry write 미구현: Region에 PK 바인딩 파라미터 없어 dedup 불가(자동 UUID).
+        # UI 선행조건: id PK 바인딩 파라미터 추가 필요.
+        # → 로컬 유지(HybridStore.__getattr__이 LocalOntologyStore로 위임).
         self._unsupported("write_region")
 
     def write_track(self, track: Track) -> None:
         self._unsupported("write_track")
 
     def write_anomaly(self, anomaly, evidence, involves=()) -> None:
+        # Foundry write 미구현: create-anomaly에 confidence·status·explanation 파라미터가 없어
+        # provenance 정보(근거 링크·신뢰도·상태·설명)를 손실 없이 쓸 수 없음(프로젝트 원칙 위반).
+        # UI 선행조건: evidenced_by 링크 파라미터 + confidence/status/explanation 파라미터 추가.
+        # → 로컬 유지.
         self._unsupported("write_anomaly")
 
     def write_satellite(self, satellite: Satellite) -> None:
@@ -396,11 +396,10 @@ class HybridStore:
     def link(
         self, src_type: str, src_id: str, link_type: str, dst_type: str, dst_id: str
     ) -> None:
-        # observed_as만 Foundry(FK 링크), 나머지 관계(composed_of·evidenced_by·mentions 등)는 로컬.
         if link_type == "observed_as":
-            self.foundry.link(src_type, src_id, link_type, dst_type, dst_id)
-        else:
-            self.local.link(src_type, src_id, link_type, dst_type, dst_id)
+            # observed_as: write_observation의 aircraftIcao24 FK로 자동 형성(§7-2) → no-op.
+            return
+        self.local.link(src_type, src_id, link_type, dst_type, dst_id)
 
     def query_aircraft(self) -> list[Aircraft]:
         return self.foundry.query_aircraft()
