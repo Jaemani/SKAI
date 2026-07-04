@@ -38,8 +38,10 @@ from copilot.intent import (
     classify,
 )
 from copilot.parser import ParsedQuery, parse_query
+from copilot.region_summary import AipRegionSummarizer
 from copilot.tools import Fact
 from ontology.model import AssessmentSentence, SituationAssessment
+from ontology.store_foundry import current_backend
 
 # CORRELATION_WINDOW_SECONDS(±60분)의 SSOT는 상관 엔진(anomaly.correlation)이다. P5부터
 # 상관 로직은 correlation.py 한 곳이 담당하고, copilot은 correlate()가 영속한
@@ -468,6 +470,67 @@ def _polish_narration(
     except Exception as e:  # 실패·타임아웃·불일치 → 원문 유지(폴백)
         print(f"[assessment] claude 서술 다듬기 실패 → 원문 유지: {e!r}")
         return sentences, "template(claude 폴백)"
+
+
+# ── (옵션) AIP Logic 지역 상황요약 — 헤드라인 서술만 생성, cites 불변 ──────────
+def _weather_one_liner(reads: ToolReads) -> Optional[str]:
+    """AIP 입력용 기상 한 줄(선택 파라미터). 기상 사실이 없으면 None."""
+    if not reads.weather:
+        return None
+    d = reads.weather[0].data
+    cat = d.get("flight_category") or "—"
+    ceil = f"{d['ceiling_ft']}ft" if d.get("ceiling_ft") is not None else "무제한"
+    return f"{d.get('station')} {cat}·실링 {ceil}"
+
+
+def _aip_region_summary(
+    pq: ParsedQuery,
+    reads: ToolReads,
+    region_name: str,
+    sentences: list[AssessmentSentence],
+    summarizer: Optional[AipRegionSummarizer] = None,
+) -> tuple[list[AssessmentSentence], str, Optional[str]]:
+    """헤드라인(요약) 문장의 **서술만** AIP Logic region-situation-summary로 생성한다.
+
+    반환 (sentences, backend, overall_assessment). 사실 확정·문장별 cites는 룰이 유지하고,
+    AIP는 요약 서술만 만든다(citation 불변식 우회 없음):
+      - 헤드라인(kind=summary) 문장이 있고 이상징후가 있을 때만 AIP 호출(0건이면 스킵 — 0건
+        규칙 이중 안전 + 호출 절약).
+      - AIP summary로 헤드라인 **text만** 교체하고 cites·kind는 불변(집계 Anomaly id 등 provenance
+        보존). confidence는 AIP 종합값(이 백엔드 한정 — explainer aip와 동일 규율).
+      - overallAssessment는 응답 메타로 반환(+요약 문장에 자연 반영). 실패·빈응답 → 원문 유지.
+
+    호출자(assess)가 Foundry 스토어 게이트를 이미 통과시켜 부른다(anomalies2가 Foundry Object
+    set이라 로컬 전용 모드에선 호출하지 않는다).
+    """
+    if not sentences or sentences[0].kind != KIND_SUMMARY:
+        return (
+            sentences,
+            "template",
+            None,
+        )  # 요약 헤드라인 없음(무근거 헤드라인 방지 경로)
+    anomaly_ids = [f.data["id"] for f in reads.anomalies]
+    if not anomaly_ids:
+        return sentences, "template", None  # 0건 → AIP 호출 없이 template 유지
+
+    summarizer = summarizer or AipRegionSummarizer()
+    result = summarizer.summarize(
+        region_name,
+        anomaly_ids,
+        window_label=pq.window_label,
+        weather_summary=_weather_one_liner(reads),
+    )
+    if result is None:  # 크리덴셜·네트워크·빈응답 등 → template 헤드라인 유지(폴백)
+        return sentences, "template(aip 폴백)", None
+
+    head = sentences[0]
+    new_head = AssessmentSentence(
+        text=result.summary,
+        cites=head.cites,  # ← cites 불변(citation은 룰 측에 남는다)
+        confidence=round(result.confidence, 2),
+        kind=head.kind,
+    )
+    return [new_head, *sentences[1:]], "aip_logic", result.overall_assessment or None
 
 
 # ── 종합 신뢰도 ──────────────────────────────────────────────────────────────
@@ -943,9 +1006,14 @@ def assess(
             "cited_objects": {},
         }
 
-    # (옵션) LLM 서술 다듬기 — cites 불변, 실패 시 원문(DR-0004 폴백).
-    # SKAI_COPILOT_LLM(신규) 우선, 없으면 SKAI_EXPLAINER(하위호환). 기본 template=결정적.
+    # (옵션) 서술 백엔드 — cites 불변, 실패 시 원문(DR-0004 폴백). 기본 template=결정적.
+    # SKAI_COPILOT_LLM(신규) 우선, 없으면 SKAI_EXPLAINER(하위호환).
+    #   claude → 모든 문장 서술 다듬기(_polish_narration).
+    #   aip    → situation_summary 헤드라인 서술을 AIP Logic region-situation-summary로 생성.
+    #            (Foundry Anomaly Object set을 종합하므로 Foundry 스토어일 때만 — 로컬 전용 모드는
+    #             template 유지. 그 외 의도는 template — 이번 배선은 상황요약 헤드라인 한정.)
     backend = "template"
+    overall_assessment: Optional[str] = None
     name = (
         explainer
         or os.environ.get("SKAI_COPILOT_LLM")
@@ -953,6 +1021,17 @@ def assess(
     ).lower()
     if name == "claude":
         sentences, backend = _polish_narration(sentences)
+    elif name == "aip":
+        if (
+            intent_obj.intent == INTENT_SITUATION_SUMMARY
+            and current_backend() == "foundry"
+        ):
+            sentences, backend, overall_assessment = _aip_region_summary(
+                pq, reads, region_name, sentences
+            )
+        else:
+            # aip 요청이나 비적용(비요약 의도·로컬 스토어) → template 헤드라인 유지(정직 라벨).
+            backend = "template(aip 미적용)"
 
     overall = _overall_confidence(sentences)
     created_at = pq.now
@@ -976,6 +1055,10 @@ def assess(
             "matched_region_alias": pq.matched_region_alias,
             "intent": intent_obj.intent,
             "slots": intent_obj.slots,
+            # AIP 상황요약 한줄판정(있을 때만) — 프론트 후속 표시용 메타.
+            **(
+                {"overall_assessment": overall_assessment} if overall_assessment else {}
+            ),
         },
     )
     # GenerateSituationAssessment 액션 — 문장별 cites 강제 + aggregates/cites 링크 영속.
@@ -1002,6 +1085,7 @@ def assess(
         ],
         "confidence": overall,
         "produced_by": backend,
+        "overall_assessment": overall_assessment,  # AIP 한줄판정(없으면 None)
         "created_at": created_at,
         "counts": counts,
         "cited_objects": _cited_objects(store, sentences),

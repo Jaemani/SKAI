@@ -48,6 +48,46 @@ def _fmt_ts(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
+# ── 공용 Foundry AIP 헬퍼(explain-anomaly·region-situation-summary 공용) ──────────
+def make_foundry_osdk_client(timeout: int = 30):
+    """생성 OSDK FoundryClient lazy 생성(env FOUNDRY_TOKEN·FOUNDRY_HOSTNAME).
+
+    AIP Logic 함수(explain-anomaly·region-situation-summary)를 호출하는 여러 경로가 같은
+    클라이언트 생성 규율을 쓰도록 한 곳으로 모은다(SSOT). SDK는 메인 .venv(3.14)엔 없어
+    반드시 lazy import(store_foundry와 동일). 크리덴셜 없으면 RuntimeError(호출자가 폴백).
+    """
+    from foundry_sdk import Config, UserTokenAuth
+    from skai_osdk_sdk import FoundryClient
+
+    token = os.environ.get("FOUNDRY_TOKEN")
+    hostname = os.environ.get("FOUNDRY_HOSTNAME")
+    if not token or not hostname:
+        raise RuntimeError(
+            "FOUNDRY_TOKEN·FOUNDRY_HOSTNAME 미설정 — AIP Logic 호출 불가(폴백)."
+        )
+    return FoundryClient(
+        auth=UserTokenAuth(token=token),
+        hostname=hostname,
+        config=Config(timeout=timeout),
+    )
+
+
+def allow_beta_features():
+    """AIP Logic 응답(beta StructType)용 AllowBetaFeatures 컨텍스트.
+
+    OSDK 미설치 환경(메인 .venv·단위테스트)에선 foundry_sdk_runtime이 없어 nullcontext로
+    강등(주입 fake client는 beta 게이팅 없음). 실 환경(.venv312)에선 진짜 컨텍스트를 쓴다.
+    """
+    try:
+        from foundry_sdk_runtime import AllowBetaFeatures
+
+        return AllowBetaFeatures()
+    except ImportError:
+        import contextlib
+
+        return contextlib.nullcontext()
+
+
 def _facts(candidate: AnomalyCandidate) -> dict:
     """후보에서 설명에 필요한 사실을 추출(룰이 확정한 하드 사실만)."""
     o = candidate.observation
@@ -286,22 +326,9 @@ class AipLogicExplainer:
             )
 
     def _get_client(self):
-        """OSDK FoundryClient lazy 생성(메인 .venv엔 OSDK 없음 → 반드시 lazy import)."""
+        """OSDK FoundryClient lazy 생성(공용 헬퍼 위임 — region summary와 동일 규율)."""
         if self._client is None:
-            from foundry_sdk import Config, UserTokenAuth
-            from skai_osdk_sdk import FoundryClient
-
-            token = os.environ.get("FOUNDRY_TOKEN")
-            hostname = os.environ.get("FOUNDRY_HOSTNAME")
-            if not token or not hostname:
-                raise RuntimeError(
-                    "FOUNDRY_TOKEN·FOUNDRY_HOSTNAME 미설정 — AIP Logic 호출 불가(폴백)."
-                )
-            self._client = FoundryClient(
-                auth=UserTokenAuth(token=token),
-                hostname=hostname,
-                config=Config(timeout=self.timeout),
-            )
+            self._client = make_foundry_osdk_client(self.timeout)
         return self._client
 
     def _resolve_evidence(self, client, candidate: AnomalyCandidate, facts: dict):
@@ -328,19 +355,8 @@ class AipLogicExplainer:
 
     @staticmethod
     def _allow_beta():
-        """explain-anomaly 응답이 beta StructType라 필요한 AllowBetaFeatures 컨텍스트.
-
-        OSDK 미설치 환경(메인 .venv·단위테스트)에선 foundry_sdk_runtime이 없어 null 컨텍스트로
-        강등(주입 fake client는 beta 게이팅 없음). 실 환경(.venv312)에선 진짜 컨텍스트를 쓴다.
-        """
-        try:
-            from foundry_sdk_runtime import AllowBetaFeatures
-
-            return AllowBetaFeatures()
-        except ImportError:
-            import contextlib
-
-            return contextlib.nullcontext()
+        """explain-anomaly 응답(beta StructType)용 컨텍스트(공용 헬퍼 위임)."""
+        return allow_beta_features()
 
     def _call_aip(self, candidate: AnomalyCandidate) -> ExplainerResult:
         client = self._get_client()
