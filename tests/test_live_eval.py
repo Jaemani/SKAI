@@ -86,8 +86,15 @@ def test_assessment_determinism(tmp_path):
 
 def test_snapshot_preserves_state(tmp_path):
     """snapshot_db가 스토어 카운트를 온전히 복제한다(스냅샷 평가의 격리 전제)."""
+    import os
+    import shutil
+
     store, _ = _populated_store(tmp_path)
     snap_path = snapshot_db(store.db_path)
-    snap = LocalOntologyStore(snap_path)
-    assert snap.counts() == store.counts()
-    assert snap.counts()["anomaly"] > 0
+    try:
+        snap = LocalOntologyStore(snap_path)
+        assert snap.counts() == store.counts()
+        assert snap.counts()["anomaly"] > 0
+    finally:
+        # snapshot_db는 TMPDIR에 임시 사본을 만든다 — 테스트가 자기 잔재를 정리.
+        shutil.rmtree(os.path.dirname(snap_path), ignore_errors=True)
