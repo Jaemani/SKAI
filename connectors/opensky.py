@@ -25,6 +25,7 @@ from anomaly.explainer import get_explainer
 from ontology import mapping
 from ontology.custody import rebuild_tracks
 from ontology.model import KADIZ_BBOX, KADIZ_REGION
+from ontology.store_foundry import make_store
 from ontology.store_local import DEFAULT_DB, LocalOntologyStore
 
 OPENSKY_URL = "https://opensky-network.org/api/states/all"
@@ -88,8 +89,12 @@ def run_poller(
     max_cycles: int = 4,
     db_path: str = DEFAULT_DB,
 ) -> None:
-    """폴러 루프. max_cycles=0 이면 무한(개발용)."""
-    store = LocalOntologyStore(db_path)
+    """폴러 루프. max_cycles=0 이면 무한(개발용).
+
+    스토어는 make_store()로 선택 — SKAI_STORE=foundry면 HybridStore(Aircraft·Observation은
+    Foundry), 미설정이면 LocalOntologyStore(기본, 데모 재현성). DR-0009.
+    """
+    store = make_store(db_path)
     store.write_region(KADIZ_REGION)  # 관심지역 상수 등록
     print(
         f"[poller] db={db_path} interval={interval}s "
