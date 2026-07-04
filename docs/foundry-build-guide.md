@@ -141,3 +141,63 @@
 3. "전량 구축 + 재발행 완료" 신호 → 코드측이 이어받음: store_foundry 확장(Anomaly·Track·OrbitPass·WeatherState·NewsEvent·Assessment write) → 전량 이관 검증 → 데모의 Foundry 스텝 교체
 
 > 진행 중 화면이 가이드와 다르면(파라미터 바인딩 UI를 못 찾는 등) 그 지점을 알려주세요.
+
+---
+
+# D부 — 액션 규칙(Rules) 트러블슈팅 (2026-07-04 전량 재검증 결과)
+
+> Object 11종은 전부 완성됐다. 남은 문제는 **액션의 "규칙(Rules)" 배선**이다.
+> Foundry 액션 = **파라미터** + **규칙(Rules)** 2층. 파라미터만 만들고 규칙에 안 엮으면 값이 아무 데도 안 들어간다.
+> 규칙 종류: **Create object / Modify object / Add link / Remove link / Delete object**.
+> (아래 UI 경로 세부는 버전마다 다를 수 있음 — 개념 기준으로 찾고, 막히면 화면 상태 공유.)
+
+## D-1. ⭐⭐ create-anomaly 재배선 (데모 최우선 — 지금 3중 결함)
+
+**증상**: ① Observation을 근거로 못 붙임(evidence 파라미터 없음) ② aircraft·newsEvents·orbitPasses가 required라 뉴스·위성 없는 이상징후도 억지 ref 필요 ③ 유효 ref를 다 줘도 ApplyActionFailed(단 Anomaly 스칼라는 생성됨 = 반쪽 객체).
+
+**고칠 것**:
+1. **evidence 파라미터 신설**: `evidence` (type = **Observation, 다중/리스트**) 추가 → **Add link 규칙**으로 `evidenced_by`(Anomaly↔Observation) 링크에 바인딩. **Required.** ← 이게 "근거 없는 이상징후 거부"의 진짜 구현.
+2. **aircraft·newsEvents·orbitPasses를 Optional로 강등** (또는 involves/evidenced_by_news/evidenced_by_orbitpass를 채우는 별도 링크 규칙으로 분리하고 required 해제). 관측 기반 이상징후가 뉴스·위성 없이 생성돼야 함.
+3. **newParameter1(orphan) 제거** — 어디에도 안 들어가는 required junk. ApplyActionFailed의 유력 원인 후보.
+4. **ApplyActionFailed 디버깅**: 위 정리 후에도 실행 실패가 남으면, create-anomaly의 규칙 목록에서 "Create Anomaly" 외에 **부가 Add link 규칙이 존재하지 않는 링크/파라미터를 참조**하는지 확인(에러 상세가 안 나와서 규칙 하나씩 소거로 범인 찾기). 막히면 규칙 스크린샷 공유.
+
+## D-2. ⭐ set-region-alert-level 재작성 (지금 Create로 오작동)
+
+**증상**: 대상 Region 파라미터가 없고 `alertLevel` 하나뿐 → 실행하면 기존 Region을 수정하는 게 아니라 **alertLevel만 채운 빈 Region을 새로 생성**(팬텀 Region 양산).
+
+**고칠 것**: 액션을 지우고 다시 만들거나 규칙 교체 —
+- 파라미터: **대상 Region** (object) + `alertLevel` (String)
+- 규칙: **Modify object**(Create 아님!) → 그 Region의 `alertLevel` 속성을 파라미터 값으로 설정.
+- ✅ 참고: **confirm-anomaly가 이 패턴으로 정상 작동**한다(대상 object 파라미터 + Modify로 status 전이). 그걸 복제하면 됨.
+
+## D-3. 신규 7타입 create에 PK 파라미터 (엔티티 해소)
+
+operator·satellite·orbit-pass·track·weather-state·news-event·situation-assessment의 create 액션이 전부 **PK 파라미터 없이 UUID 자동**이다. create-aircraft가 하듯:
+- 각 create 액션에 PK 파라미터 추가(`operatorId`·`noradId`·`passId`·`trackId`·`weatherId`·`newsId`·`assessmentId`) → **Create object 규칙에서 primary key에 바인딩**.
+- 특히 **Satellite(noradId)·Operator·OrbitPass**는 실세계 안정키 dedup이 필수(같은 위성=같은 noradId). UUID면 매 인제스트마다 중복 생성됨.
+
+## D-4. 링크 FK/규칙 지정 완료 (속성은 있는데 링크가 없음)
+
+아래는 **속성 값은 저장되는데 링크(그래프 엣지)가 안 맺혀** traverse가 안 된다. Object Type의 Links 탭에서 FK 링크로 지정:
+- **OrbitPass.satelliteNoradId → `of`(Satellite)** + **OrbitPass.regionId → `over`(Region)** ← 위성 통과 서사
+- **Observation → `within`(Region)** ← 지오펜스 진입 판정(ontology.md §2 백본). Observation에 `regionId`(String) 속성 추가 후 FK 링크.
+- **Track.aircraftIcao24 → Aircraft** · **WeatherState.regionId → Region** · **SituationAssessment.regionId → Region**
+
+## D-5. composed_of 채움 수단
+
+Track↔Observation 링크(FK=`trackId`)는 만들어졌으나 **create/edit-observation에 `trackId` 파라미터가 없어** 채울 수가 없다. edit-observation에 `trackId` 파라미터 추가(custody 확정 시 관측을 트랙에 귀속).
+
+## D-6. self-link required junk 제거
+
+create-news-event의 `newsEvents`(자기참조), create-situation-assessment의 `situationAssessments`(자기참조)가 **required junk**(첫 객체도 존재하지 않는 self ref를 넣어야 통과). Optional로 강등 또는 제거.
+
+## D-7. (권장·낮은 우선순위)
+
+- `newParameter` → `icao24`/`obsId`/`anomalyId`/`id` 리네임(기능 정상, 자기문서화)
+- edit-aircraft.isMilitary 타입 String→Boolean(객체 속성·create와 불일치)
+- `editrack`↔`edit-track` 중복 명명 정리
+- **OSDK 0.4.0 누락분**: `delete-orbit-pass`·`editrack`이 재발행에 빠짐 → 다음 재발행 때 포함
+
+## D-8. 마무리
+
+D-1·D-2만 끝나도 **데모 provenance 백본(Observation 근거 → 이상징후 → 상태전이 → set-alert)이 Foundry에서 완성**된다. D-3~D-6은 융합 완성도(전량 이관)용. 전부 반영 후 **OSDK 재발행**(D-7의 누락분 포함) → 코드측이 store_foundry 확장으로 이어받음.
