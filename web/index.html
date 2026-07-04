@@ -1,0 +1,959 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SKAI Air ISR — P4 코파일럿 (KADIZ)</title>
+  <!-- vanilla Leaflet (빌드 없음, DR-0003) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    html, body { margin: 0; height: 100%; font-family: -apple-system, "Segoe UI", sans-serif; }
+    #map { height: 100%; width: 100%; background: #0b1622; }
+    .card {
+      position: absolute; z-index: 1000;
+      background: rgba(12, 22, 34, 0.94); color: #dbe7f3;
+      padding: 12px 14px; border-radius: 8px; font-size: 13px;
+      line-height: 1.55; box-shadow: 0 2px 10px rgba(0,0,0,0.45);
+    }
+    /* 우상단 통계 패널 */
+    #panel { top: 12px; right: 12px; min-width: 190px; }
+    #panel h1 { font-size: 14px; margin: 0 0 6px; color: #6fb4ff; }
+    #panel .row { display: flex; justify-content: space-between; gap: 12px; }
+    #panel .k { color: #93a7bd; }
+    #panel .legend { margin-top: 8px; border-top: 1px solid #24384f; padding-top: 8px; }
+    #panel .legend span { display: inline-block; width: 22px; height: 0; vertical-align: middle; margin-right: 6px; }
+    #panel .l-track { border-top: 3px solid #35c26b; }
+    #panel .l-gap { border-top: 3px dashed #ff6b6b; }
+    #panel .l-ac { width: 10px; height: 10px; border-radius: 50%; background: #ffd166; border: 1px solid #7a5c00; }
+    #panel .l-anom { width: 12px; height: 12px; border-radius: 50%; background: #ff3b3b; border: 2px solid #ffd0d0; }
+    #panel .l-sat { border-top: 3px dashed #38d9d9; }
+    #panel .l-oparea { width: 12px; height: 9px; background: #7a4a12; border: 1px solid #ffa94d; }
+    #panel #type-legend { margin-top: 8px; border-top: 1px solid #24384f; padding-top: 6px; display: flex; flex-wrap: wrap; gap: 5px 8px; }
+    #panel #type-legend .tchip { display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; color: #b9c8d8; }
+    #panel #type-legend .tchip i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+    #panel .stamp { margin-top: 8px; color: #7d93aa; font-size: 11px; }
+    /* 위성 궤적 토글 + 소스별 카운트 */
+    #panel .toggle { margin-top: 8px; display: flex; align-items: center; gap: 6px; font-size: 12px; color: #93a7bd; }
+    #panel .toggle input { accent-color: #38d9d9; }
+    #panel .src { margin-top: 8px; border-top: 1px solid #24384f; padding-top: 8px; }
+    #panel .src .st { color: #6fb4ff; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 4px; }
+    #panel .src .row { font-size: 12px; }
+
+    /* 우하단 기상 카드 */
+    #weather { bottom: 12px; right: 12px; width: 224px; }
+    #weather h1 { font-size: 13px; margin: 0 0 6px; color: #6fd0ff; }
+    #weather .row { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; margin: 2px 0; }
+    #weather .k { color: #93a7bd; }
+    #weather .cat { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 10px; font-weight: 600; }
+    #weather .cat-VFR { background: #163a2a; color: #7ce0a8; }
+    #weather .cat-MVFR { background: #183a52; color: #7ac4ff; }
+    #weather .cat-IFR { background: #4a3a12; color: #ffce7a; }
+    #weather .cat-LIFR { background: #5a1414; color: #ff9a9a; }
+    #weather .raw { margin-top: 6px; color: #7d93aa; font-size: 10.5px; word-break: break-all; }
+    #weather .empty { color: #7d93aa; font-size: 12px; }
+
+    /* 좌하단 뉴스 패널 (저신뢰 OSINT) */
+    #news { bottom: 12px; left: 12px; width: 320px; max-height: 36vh; display: flex; flex-direction: column; padding: 0; }
+    #news .hdr { padding: 10px 14px 8px; border-bottom: 1px solid #24384f; }
+    #news .hdr h1 { font-size: 13px; margin: 0; color: #c3a9ff; }
+    #news .hdr .sub { color: #93a7bd; font-size: 11px; margin-top: 3px; }
+    #news-list { overflow-y: auto; padding: 6px; }
+    #news-list .empty { color: #7d93aa; padding: 10px; font-size: 12px; }
+    .news-item { border: 1px solid #24384f; border-left: 4px solid #8a6fff; border-radius: 6px; padding: 7px 10px; margin: 6px; }
+    .news-item .n-title { color: #dfe6f0; font-size: 12px; line-height: 1.4; }
+    .news-item .n-title a { color: #dfe6f0; text-decoration: none; }
+    .news-item .n-title a:hover { text-decoration: underline; }
+    .news-item .n-meta { display: flex; justify-content: space-between; gap: 8px; margin-top: 5px; color: #93a7bd; font-size: 10.5px; align-items: center; }
+    .b-lowconf { background: #3a2a12; color: #ffc078; }
+    .b-region { background: #2d2350; color: #c3a9ff; }
+
+    /* 좌상단 이상징후 타임라인 */
+    #timeline { top: 12px; left: 12px; width: 320px; max-height: 56vh;
+      display: flex; flex-direction: column; padding: 0; }
+    #timeline .hdr { padding: 12px 14px 8px; border-bottom: 1px solid #24384f; }
+    #timeline .hdr h1 { font-size: 14px; margin: 0; color: #ff8a8a; }
+    #timeline .hdr .sub { color: #93a7bd; font-size: 11px; margin-top: 3px; }
+    #tl-list { overflow-y: auto; padding: 6px; }
+    #tl-list .empty { color: #7d93aa; padding: 10px; font-size: 12px; }
+    .anom-item {
+      border: 1px solid #24384f; border-left: 4px solid #ff3b3b;
+      border-radius: 6px; padding: 8px 10px; margin: 6px; cursor: pointer;
+      transition: background 0.12s;
+    }
+    .anom-item:hover { background: rgba(60, 90, 130, 0.22); }
+    .anom-item.sel { background: rgba(80, 120, 170, 0.30); border-color: #6fb4ff; }
+    .anom-item.st-confirmed { border-left-color: #c0392b; }
+    .anom-item.st-dismissed { border-left-color: #6b7a8d; opacity: 0.6; }
+    .anom-item.st-dismissed .a-title { text-decoration: line-through; }
+    .anom-item .a-title { font-weight: 600; color: #ffd7d7; }
+    .anom-item .a-meta { color: #93a7bd; font-size: 11px; margin-top: 3px;
+      display: flex; justify-content: space-between; gap: 8px; }
+    .badge { display: inline-block; padding: 1px 7px; border-radius: 10px;
+      font-size: 10px; font-weight: 600; }
+    .b-candidate { background: #4a3a12; color: #ffce7a; }
+    .b-confirmed { background: #5a1414; color: #ff9a9a; }
+    .b-dismissed { background: #2a333d; color: #9fb0c2; }
+    .b-conf { background: #163a2a; color: #7ce0a8; }
+    .b-synth { background: #2d2350; color: #c3a9ff; }
+    .b-corr { background: #123a3a; color: #7fe3e3; }
+    #detail .corr {
+      border: 1px solid #1c4a4a; border-left: 3px solid #38d9d9; border-radius: 5px;
+      padding: 5px 8px; margin: 4px 0; font-size: 11.5px; background: rgba(18, 46, 46, 0.5);
+    }
+    #detail .corr .ct { color: #8fe4e4; font-weight: 600; }
+
+    /* 선택 상세 (타임라인 하단) */
+    #detail { border-top: 1px solid #24384f; padding: 12px 14px; display: none; }
+    #detail .d-expl { color: #cfe0f0; font-size: 12.5px; margin: 4px 0 8px; }
+    #detail .d-sect { color: #6fb4ff; font-size: 11px; text-transform: uppercase;
+      letter-spacing: 0.4px; margin: 8px 0 4px; }
+    #detail .ev {
+      border: 1px solid #24384f; border-radius: 5px; padding: 6px 8px; margin: 4px 0;
+      font-size: 11.5px; background: rgba(20, 34, 50, 0.6);
+    }
+    #detail .ev .ev-h { color: #dbe7f3; font-weight: 600; }
+    #detail .ev a { color: #6fb4ff; word-break: break-all; }
+    #detail .actions { display: flex; gap: 8px; margin-top: 10px; }
+    #detail button {
+      flex: 1; padding: 7px 0; border: none; border-radius: 6px; cursor: pointer;
+      font-size: 12px; font-weight: 600; color: #fff;
+    }
+    #detail .btn-confirm { background: #c0392b; }
+    #detail .btn-confirm:hover { background: #d84a3a; }
+    #detail .btn-dismiss { background: #45525f; }
+    #detail .btn-dismiss:hover { background: #566370; }
+    #detail button:disabled { opacity: 0.45; cursor: default; }
+    #detail .backend { color: #7d93aa; font-size: 10.5px; margin-top: 8px; }
+
+    /* 하단 중앙: 코파일럿 채팅 (P4) */
+    #chat { bottom: 12px; left: 50%; transform: translateX(-50%);
+      width: min(700px, 58vw); max-height: 66vh; display: flex; flex-direction: column; padding: 0; }
+    #chat .hdr { padding: 10px 14px 8px; border-bottom: 1px solid #24384f;
+      display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+    #chat .hdr h1 { font-size: 14px; margin: 0; color: #7ce0a8; }
+    #chat .hdr .sub { color: #93a7bd; font-size: 11px; }
+    #chat-body { overflow-y: auto; padding: 4px 12px 8px; }
+    #chat .empty { color: #7d93aa; padding: 12px 2px; font-size: 12px; }
+    #chat .parsed { font-size: 11px; color: #93a7bd; margin: 8px 0 2px;
+      border: 1px dashed #2a3f57; border-radius: 6px; padding: 6px 8px; }
+    #chat .parsed b { color: #7ac4ff; }
+    #chat .a-head { display: flex; justify-content: space-between; align-items: center;
+      margin: 8px 0 2px; gap: 8px; }
+    #chat .a-head .conf { font-size: 11px; color: #93a7bd; }
+    .a-sent { border-left: 3px solid #35506e; padding: 5px 0 5px 10px; margin: 7px 0; }
+    .a-sent .a-text { color: #e5edf6; font-size: 12.8px; line-height: 1.5; }
+    .a-sent .a-foot { margin-top: 5px; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+    .kind-badge { display: inline-block; padding: 1px 7px; border-radius: 9px;
+      font-size: 9.5px; font-weight: 700; letter-spacing: 0.3px; }
+    .cite-chip { cursor: pointer; background: #16283c; border: 1px solid #2a445f;
+      color: #9fc4e8; border-radius: 9px; padding: 1px 7px; font-size: 10px; }
+    .cite-chip:hover { background: #23486a; color: #dff0ff; }
+    .cite-chip.t-Anomaly { border-color: #7a2a2a; color: #ffb3b3; }
+    .cite-chip.t-OrbitPass { border-color: #1c5a5a; color: #8fe4e4; }
+    .cite-chip.t-WeatherState { border-color: #23506e; color: #8fc9ff; }
+    .cite-chip.t-NewsEvent { border-color: #4a3a6a; color: #cdb6ff; }
+    #chat .ask { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid #24384f; }
+    #chat .ask input { flex: 1; background: #0e1a28; border: 1px solid #24384f;
+      color: #dbe7f3; border-radius: 6px; padding: 8px 10px; font-size: 13px; outline: none; }
+    #chat .ask input:focus { border-color: #4a7bb0; }
+    #chat .ask button { background: #2e8b57; color: #fff; border: none; border-radius: 6px;
+      padding: 0 14px; font-size: 13px; font-weight: 600; cursor: pointer; }
+    #chat .ask button:hover { background: #37a366; }
+    #chat .quick { display: flex; gap: 6px; flex-wrap: wrap; padding: 0 12px 10px; }
+    #chat .quick button { background: #17293c; color: #9fc4e8; border: 1px solid #24384f;
+      border-radius: 12px; padding: 3px 9px; font-size: 10.5px; cursor: pointer; }
+    #chat .quick button:hover { background: #22405c; color: #dff0ff; }
+    #chat .sg-open { background: #2b3f5c; color: #cfe0f0; border: none; border-radius: 6px;
+      padding: 4px 10px; font-size: 11px; cursor: pointer; }
+    #chat .sg-open:hover { background: #37527a; }
+    #chat .sg-open:disabled { opacity: 0.4; cursor: default; }
+
+    /* 서브그래프 모달 (자체 SVG — 외부 그래프 라이브러리 없음, DR-0006) */
+    #sg-modal { position: absolute; inset: 0; z-index: 2000; background: rgba(4, 10, 18, 0.88);
+      display: none; align-items: center; justify-content: center; }
+    #sg-modal.open { display: flex; }
+    #sg-box { width: min(1020px, 94vw); height: min(700px, 90vh); background: #0b1622;
+      border: 1px solid #294057; border-radius: 10px; display: flex; flex-direction: column;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.6); }
+    #sg-box .hdr { padding: 10px 14px; border-bottom: 1px solid #24384f;
+      display: flex; justify-content: space-between; align-items: center; }
+    #sg-box .hdr h1 { font-size: 14px; margin: 0; color: #6fb4ff; }
+    #sg-box .hdr .x { cursor: pointer; color: #93a7bd; font-size: 18px; padding: 0 6px; }
+    #sg-box .hdr .x:hover { color: #fff; }
+    #sg-wrap { flex: 1; display: flex; min-height: 0; }
+    #sg-svg { flex: 1; height: 100%; background:
+      radial-gradient(circle at 50% 45%, #0e1c2c 0%, #0a131e 70%); }
+    #sg-detail { width: 240px; border-left: 1px solid #24384f; padding: 12px;
+      font-size: 12px; color: #cfe0f0; overflow-y: auto; }
+    #sg-detail .k { color: #93a7bd; }
+    #sg-detail a { color: #6fb4ff; word-break: break-all; }
+    #sg-legend { padding: 6px 14px 10px; border-top: 1px solid #24384f; display: flex;
+      flex-wrap: wrap; gap: 10px; font-size: 10.5px; color: #93a7bd; }
+    #sg-legend span { display: inline-flex; align-items: center; gap: 4px; }
+    #sg-legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    .sg-edge { stroke: #33506f; stroke-width: 1.2; fill: none; }
+    .sg-edge.l-aggregates { stroke: #b05555; stroke-dasharray: 4 3; }
+    .sg-edge.l-cites { stroke: #3a6390; }
+    .sg-edge.l-evidenced_by { stroke: #7a6a3a; stroke-dasharray: 2 3; }
+    .sg-edge.l-involves { stroke: #4a6a4a; stroke-dasharray: 2 3; }
+    .sg-edge.l-correlated_with { stroke: #38d9d9; stroke-width: 1.8; stroke-dasharray: 6 3; }
+    .sg-elabel { fill: #6f88a3; font-size: 8.5px; pointer-events: none; }
+    .sg-node circle { cursor: pointer; stroke: #0b1622; stroke-width: 1.5; }
+    .sg-node.sel circle { stroke: #fff; stroke-width: 2.5; }
+    .sg-nlabel { fill: #cfe0f0; font-size: 9.5px; pointer-events: none; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <!-- 우상단: 통계 -->
+  <div id="panel" class="card">
+    <h1>SKAI · Air ISR (P4)</h1>
+    <div class="row"><span class="k">관심지역</span><span id="region">—</span></div>
+    <div class="row"><span class="k">항적(현재)</span><span id="n-obs">0</span></div>
+    <div class="row"><span class="k">트랙</span><span id="n-track">0</span></div>
+    <div class="row"><span class="k">gap 트랙</span><span id="n-gap">0</span></div>
+    <div class="row"><span class="k">이상징후</span><span id="n-anom">0</span></div>
+    <div class="legend">
+      <div><span class="l-ac"></span>항공기(콜사인 툴팁)</div>
+      <div><span class="l-track"></span>트랙 경로</div>
+      <div><span class="l-gap"></span>ADS-B gap 트랙</div>
+      <div><span class="l-sat"></span>위성 지상궤적(통과창)</div>
+      <div><span class="l-oparea"></span>작전구역(OpArea)</div>
+    </div>
+    <div id="type-legend"></div>
+    <label class="toggle">
+      <input type="checkbox" id="tog-sat" checked /> 위성 궤적 표시
+    </label>
+    <!-- 소스별 객체 카운트 (P3 산출 요구) -->
+    <div class="src">
+      <div class="st">소스별 객체 (온톨로지)</div>
+      <div class="row"><span class="k">OpenSky 항적</span><span id="c-opensky">0</span></div>
+      <div class="row"><span class="k">Celestrak 통과</span><span id="c-celestrak">0</span></div>
+      <div class="row"><span class="k">METAR 기상</span><span id="c-metar">0</span></div>
+      <div class="row"><span class="k">GDELT 뉴스</span><span id="c-gdelt">0</span></div>
+    </div>
+    <div class="stamp" id="stamp">갱신 대기…</div>
+  </div>
+
+  <!-- 우하단: 기상 카드 (METAR) -->
+  <div id="weather" class="card">
+    <h1>🌦 기상 (METAR)</h1>
+    <div id="weather-body"><div class="empty">기상 수신 대기…</div></div>
+  </div>
+
+  <!-- 좌하단: 뉴스 패널 (GDELT · 저신뢰 OSINT) -->
+  <div id="news" class="card">
+    <div class="hdr">
+      <h1>📰 뉴스 / OSINT (저신뢰)</h1>
+      <div class="sub">확증 아님 · 하드 소스로 교차검증 · 신뢰도 ≤ 0.4</div>
+    </div>
+    <div id="news-list"><div class="empty">뉴스 수신 대기…</div></div>
+  </div>
+
+  <!-- 좌상단: 이상징후 타임라인 + 선택 상세 -->
+  <div id="timeline" class="card">
+    <div class="hdr">
+      <h1>⚠ 이상징후 타임라인</h1>
+      <div class="sub">항목 클릭 → 지도 하이라이트 · 근거 · 승인/기각</div>
+    </div>
+    <div id="tl-list"><div class="empty">탐지된 이상징후 없음</div></div>
+    <div id="detail"></div>
+  </div>
+
+  <!-- 하단 중앙: 코파일럿 채팅 (P4) -->
+  <div id="chat" class="card">
+    <div class="hdr">
+      <div><h1>🛰 코파일럿 · 상황평가</h1>
+        <div class="sub">자연어 질의 → 문장별 근거(cites) 강제 · 근거 없는 주장 출력 안 함</div></div>
+      <button class="sg-open" id="sg-open" disabled onclick="openSubgraph()">🕸 서브그래프</button>
+    </div>
+    <div id="chat-body"><div class="empty">질의를 입력하거나 아래 예시를 눌러보세요.</div></div>
+    <div class="quick" id="chat-quick"></div>
+    <div class="ask">
+      <input id="chat-input" type="text" placeholder="예: 지금 KADIZ 근방 이상한 거 있어?"
+        autocomplete="off" />
+      <button onclick="submitChat()">질의</button>
+    </div>
+  </div>
+
+  <!-- 서브그래프 모달 (Assessment 중심 온톨로지 서브그래프, 자체 SVG) -->
+  <div id="sg-modal">
+    <div id="sg-box">
+      <div class="hdr">
+        <h1>🕸 온톨로지 서브그래프 · <span id="sg-title">—</span></h1>
+        <span class="x" onclick="closeSubgraph()">✕</span>
+      </div>
+      <div id="sg-wrap">
+        <svg id="sg-svg"></svg>
+        <div id="sg-detail"><span class="k">노드를 클릭하면 상세가 표시됩니다.</span></div>
+      </div>
+      <div id="sg-legend"></div>
+    </div>
+  </div>
+
+  <script>
+    // KADIZ 중심 근방 (lat 32~39, lon 122~132)
+    const map = L.map("map", { zoomControl: true }).setView([35.6, 127.0], 6);
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+      attribution: "&copy; OpenStreetMap &copy; CARTO",
+      maxZoom: 12,
+    }).addTo(map);
+
+    // 레이어 그룹 (갱신 시 통째로 교체). satLayer는 anom/ac보다 먼저 add → 아래 깔림.
+    let regionLayer = L.layerGroup().addTo(map);
+    let trackLayer = L.layerGroup().addTo(map);
+    let satLayer = L.layerGroup().addTo(map);
+    let acLayer = L.layerGroup().addTo(map);
+    let anomLayer = L.layerGroup().addTo(map);
+
+    let lastPasses = [];                // 마지막 OrbitPass (토글 재그리기용)
+    let showSat = true;                 // 위성 궤적 표시 여부
+
+    let selectedId = null;              // 선택된 Anomaly id (갱신 사이 유지)
+    let anomMarkers = {};               // id → Leaflet marker (하이라이트용)
+    let lastAnomalies = [];             // 마지막 anomalies (상세 렌더용)
+
+    async function getJSON(url) {
+      const r = await fetch(url, { cache: "no-store" });
+      if (!r.ok) throw new Error(url + " → HTTP " + r.status);
+      return r.json();
+    }
+    async function postJSON(url) {
+      const r = await fetch(url, { method: "POST", cache: "no-store" });
+      if (!r.ok) throw new Error(url + " → HTTP " + r.status);
+      return r.json();
+    }
+    function fmtTime(ts) {
+      return new Date(ts * 1000).toLocaleString("ko-KR", { hour12: false });
+    }
+    // 이상징후 유형 → 라벨·아이콘·색 (P5: 5종). 마커/타임라인/툴팁에서 유형 구분.
+    const TYPE_LABEL = {
+      emergency_squawk: "비상 스쿽",
+      adsb_dropout: "ADS-B dropout",
+      loitering: "로이터링",
+      military_approach: "군용기 접근",
+      satellite_proximity: "위성 근접",
+    };
+    const TYPE_ICON = {
+      emergency_squawk: "🆘", adsb_dropout: "📡", loitering: "🌀",
+      military_approach: "🪖", satellite_proximity: "🛰",
+    };
+    const TYPE_COLOR = {
+      emergency_squawk: "#ff3b3b", adsb_dropout: "#ff9f43", loitering: "#feca57",
+      military_approach: "#ee5253", satellite_proximity: "#48dbfb",
+    };
+    const STATUS_LABEL = { candidate: "후보", confirmed: "확인됨", dismissed: "기각됨" };
+
+    function drawRegions(regions) {
+      regionLayer.clearLayers();
+      let name = "—";
+      for (const reg of regions) {
+        // ADIZ(KADIZ)는 파랑 큰 폴리곤, OpArea 소구역은 주황 강조(민감 작전구역).
+        const isOp = reg.classification === "OpArea";
+        if (reg.classification === "ADIZ") name = reg.name;  // 헤더엔 ADIZ 이름
+        L.polygon(reg.geo, {
+          color: isOp ? "#ffa94d" : "#6fb4ff",
+          weight: isOp ? 2 : 2,
+          fillColor: isOp ? "#7a4a12" : "#1e4b78",
+          fillOpacity: isOp ? 0.14 : 0.08,
+          dashArray: isOp ? "3 4" : "6 6",
+        }).bindTooltip(reg.name + " · " + reg.classification).addTo(regionLayer);
+      }
+      document.getElementById("region").textContent = name;
+    }
+
+    function drawTracks(tracks) {
+      trackLayer.clearLayers();
+      let gapCount = 0;
+      for (const t of tracks) {
+        if (!t.path || t.path.length < 2) continue;
+        const gap = t.has_gap;
+        if (gap) gapCount++;
+        L.polyline(t.path, {
+          color: gap ? "#ff6b6b" : "#35c26b",
+          weight: gap ? 3 : 2,
+          opacity: 0.85,
+          dashArray: gap ? "6 6" : null,
+        }).bindTooltip(
+          (t.callsign || t.icao24) + " · " + t.n_points + "점" +
+          (gap ? " · ⚠ ADS-B gap" : "")
+        ).addTo(trackLayer);
+      }
+      document.getElementById("n-track").textContent = tracks.length;
+      document.getElementById("n-gap").textContent = gapCount;
+    }
+
+    function drawAircraft(obs) {
+      acLayer.clearLayers();
+      for (const o of obs) {
+        const emerg = ["7500", "7600", "7700"].includes(o.squawk);
+        L.circleMarker([o.lat, o.lon], {
+          radius: 5,
+          color: emerg ? "#ff3b3b" : "#7a5c00",
+          weight: 1,
+          fillColor: emerg ? "#ff3b3b" : "#ffd166",
+          fillOpacity: 0.95,
+        }).bindTooltip(
+          "<b>" + (o.callsign || o.icao24) + "</b>" +
+          (o.squawk ? " · sq " + o.squawk : "") +
+          (o.alt != null ? "<br>고도 " + Math.round(o.alt) + " m" : "") +
+          (o.velocity != null ? "<br>속도 " + Math.round(o.velocity) + " m/s" : "") +
+          "<br><span style='color:#8aa'>" + o.source + "</span>"
+        ).addTo(acLayer);
+      }
+      document.getElementById("n-obs").textContent = obs.length;
+    }
+
+    function fmtClock(ts) {
+      return new Date(ts * 1000).toLocaleTimeString("ko-KR",
+        { hour12: false, hour: "2-digit", minute: "2-digit" });
+    }
+
+    // 위성 지상궤적(통과창) — 청록 점선. 통과 구간만 그린다(over Region).
+    function drawOrbitPasses(passes) {
+      satLayer.clearLayers();
+      if (showSat) {
+        for (const p of passes) {
+          const win = fmtClock(p.start_ts) + "~" + fmtClock(p.end_ts);
+          const tip = "<b>🛰 " + p.name + "</b>" +
+            "<br>통과창 " + win +
+            "<br>최대 앙각 " + (p.max_elevation != null ? p.max_elevation.toFixed(1) + "°" : "—") +
+            (p.object_type ? "<br><span style='color:#8aa'>" + p.object_type + "</span>" : "");
+          if (p.ground_track && p.ground_track.length >= 2) {
+            L.polyline(p.ground_track, {
+              color: "#38d9d9", weight: 2, opacity: 0.9, dashArray: "5 5",
+            }).bindTooltip(tip).addTo(satLayer);
+          } else if (p.ground_track && p.ground_track.length === 1) {
+            L.circleMarker(p.ground_track[0], {
+              radius: 4, color: "#38d9d9", weight: 2,
+              fillColor: "#38d9d9", fillOpacity: 0.8,
+            }).bindTooltip(tip).addTo(satLayer);
+          }
+        }
+      }
+    }
+
+    const CAT_LABEL = { VFR: "양호", MVFR: "제한", IFR: "불량", LIFR: "매우불량" };
+    function drawWeather(weathers) {
+      const body = document.getElementById("weather-body");
+      if (!weathers || !weathers.length) {
+        body.innerHTML = '<div class="empty">기상 데이터 없음</div>';
+        return;
+      }
+      const w = weathers[0];  // 대표 공항(RKSI)
+      const cat = w.flight_category || "—";
+      const wind = (w.wind_dir != null ? w.wind_dir + "° " : "가변 ") +
+        (w.wind_speed_kt != null ? w.wind_speed_kt + "kt" : "—");
+      const vis = w.visibility_sm != null ? w.visibility_sm + " sm" : "—";
+      const ceil = w.ceiling_ft != null ? w.ceiling_ft + " ft" : "무제한";
+      body.innerHTML =
+        '<div class="row"><span class="k">공항</span><span>' + w.station + "</span></div>" +
+        '<div class="row"><span class="k">임무기상</span><span class="cat cat-' + cat + '">' +
+        cat + (CAT_LABEL[cat] ? " · " + CAT_LABEL[cat] : "") + "</span></div>" +
+        '<div class="row"><span class="k">바람</span><span>' + wind + "</span></div>" +
+        '<div class="row"><span class="k">시정</span><span>' + vis + "</span></div>" +
+        '<div class="row"><span class="k">실링</span><span>' + ceil + "</span></div>" +
+        '<div class="raw">' + (w.conditions || "") + "</div>";
+    }
+
+    function drawNews(newsList) {
+      const list = document.getElementById("news-list");
+      if (!newsList || !newsList.length) {
+        list.innerHTML = '<div class="empty">관련 뉴스 없음 — GDELT 5분 폴링</div>';
+        return;
+      }
+      list.innerHTML = "";
+      for (const n of newsList) {
+        const div = document.createElement("div");
+        div.className = "news-item";
+        const region = (n.mentions || []).some((m) => m.type === "Region")
+          ? ' <span class="badge b-region">KADIZ 언급</span>' : "";
+        const dom = (n.attrs && n.attrs.domain) ? n.attrs.domain : n.source;
+        div.innerHTML =
+          '<div class="n-title"><a href="' + n.source_url + '" target="_blank" rel="noopener">' +
+          (n.title || "(제목 없음)") + "</a></div>" +
+          '<div class="n-meta"><span>' + dom + " · " + fmtClock(n.ts) + region + "</span>" +
+          '<span class="badge b-lowconf">신뢰도 ' + n.confidence.toFixed(2) + "</span></div>";
+        list.appendChild(div);
+      }
+    }
+
+    function drawSourceCounts(counts) {
+      const s = (counts && counts.by_source) || {};
+      const os = s.opensky || {}, ce = s.celestrak || {}, mt = s.metar || {}, gd = s.gdelt || {};
+      document.getElementById("c-opensky").textContent =
+        (os.observation || 0) + " obs / " + (os.aircraft || 0) + "기";
+      document.getElementById("c-celestrak").textContent =
+        (ce.orbitpass || 0) + " 통과 / " + (ce.satellite || 0) + "위성";
+      document.getElementById("c-metar").textContent = (mt.weatherstate || 0);
+      document.getElementById("c-gdelt").textContent = (gd.newsevent || 0);
+    }
+
+    // 상태별 이상징후 마커 색. 비상 스쿽은 미검토라도 심각 → candidate 빨강.
+    // confirmed=검토 확정(짙은 빨강), dismissed=오탐(회색·흐림). 워크플로 상태는 배지로 구분.
+    const STATUS_COLOR = {
+      candidate: "#ff3b3b", confirmed: "#c0392b", dismissed: "#6b7a8d",
+    };
+
+    function drawAnomalies(anomalies) {
+      anomLayer.clearLayers();
+      anomMarkers = {};
+      for (const a of anomalies) {
+        if (a.lat == null || a.lon == null) continue;
+        // 마커 채움 = 유형 색(P5 5종 구분). 상태(dismissed)는 투명도·테두리로.
+        const color = TYPE_COLOR[a.type] || STATUS_COLOR[a.status] || "#ff3b3b";
+        const sel = a.id === selectedId;
+        const nCorr = (a.correlations || []).length;
+        const m = L.circleMarker([a.lat, a.lon], {
+          radius: sel ? 15 : 11,
+          color: sel ? "#ffffff" : (a.status === "dismissed" ? "#6b7a8d" : "#ffffff"),
+          weight: sel ? 3 : 2,
+          fillColor: color,
+          fillOpacity: a.status === "dismissed" ? 0.30 : 0.72,
+        }).bindTooltip(
+          "<b>" + (TYPE_ICON[a.type] || "⚠") + " " + (TYPE_LABEL[a.type] || a.type) + "</b>" +
+          "<br>" + (a.attrs && a.attrs.callsign ? a.attrs.callsign : "") +
+          (a.attrs && a.attrs.squawk ? " · sq " + a.attrs.squawk : "") +
+          "<br>신뢰도 " + a.confidence.toFixed(2) + " · " + (STATUS_LABEL[a.status] || a.status) +
+          (nCorr ? "<br>🔗 correlated_with " + nCorr + "건" : "")
+        );
+        m.on("click", () => selectAnomaly(a.id));
+        m.addTo(anomLayer);
+        anomMarkers[a.id] = m;
+      }
+      document.getElementById("n-anom").textContent = anomalies.length;
+    }
+
+    function renderTimeline(anomalies) {
+      const list = document.getElementById("tl-list");
+      if (!anomalies.length) {
+        list.innerHTML = '<div class="empty">탐지된 이상징후 없음 —<br>' +
+          '합성 주입: <code>python -m scripts.inject_synthetic</code></div>';
+        return;
+      }
+      list.innerHTML = "";
+      for (const a of anomalies) {
+        const div = document.createElement("div");
+        div.className = "anom-item st-" + a.status + (a.id === selectedId ? " sel" : "");
+        const synth = a.attrs && a.attrs.is_synthetic
+          ? ' <span class="badge b-synth">합성</span>' : "";
+        const nCorr = (a.correlations || []).length;
+        div.innerHTML =
+          '<div class="a-title">' + (TYPE_ICON[a.type] || "⚠") + " " + (TYPE_LABEL[a.type] || a.type) +
+          (a.attrs && a.attrs.squawk ? " " + a.attrs.squawk : "") + synth +
+          (nCorr ? ' <span class="badge b-corr">🔗' + nCorr + '</span>' : '') + '</div>' +
+          '<div class="a-meta"><span>' + (a.attrs && a.attrs.callsign ? a.attrs.callsign : (a.attrs && a.attrs.sat_name ? a.attrs.sat_name : a.type)) +
+          " · " + fmtTime(a.ts) + '</span></div>' +
+          '<div class="a-meta">' +
+          '<span class="badge b-conf">신뢰도 ' + a.confidence.toFixed(2) + '</span>' +
+          '<span class="badge b-' + a.status + '">' + (STATUS_LABEL[a.status] || a.status) + '</span>' +
+          '</div>';
+        div.onclick = () => selectAnomaly(a.id);
+        list.appendChild(div);
+      }
+    }
+
+    function renderDetail() {
+      const box = document.getElementById("detail");
+      const a = lastAnomalies.find((x) => x.id === selectedId);
+      if (!a) { box.style.display = "none"; return; }
+      box.style.display = "block";
+      let ev = "";
+      for (const e of (a.evidence || [])) {
+        ev += '<div class="ev"><div class="ev-h">' +
+          (e.callsign || e.icao24) + " · sq " + (e.squawk || "—") + "</div>" +
+          "관측 " + fmtTime(e.ts) + " · 출처 " + e.source + "<br>" +
+          '<a href="' + e.source_url + '" target="_blank" rel="noopener">' + e.source_url + "</a></div>";
+      }
+      // P5: 비-Observation 근거(위성 근접=OrbitPass)를 별도로 노출.
+      let evObj = "";
+      for (const e of (a.evidence_objects || [])) {
+        if (e.type === "Observation") continue;  // 위 ev 카드와 중복 방지
+        evObj += '<div class="ev"><div class="ev-h">' + e.label + " · " + e.type + "</div>" +
+          (e.source_url ? '<a href="' + e.source_url + '" target="_blank" rel="noopener">' + e.source_url + "</a>" : "") +
+          "</div>";
+      }
+      // P5: correlated_with 상관(교차소스 내러티브)을 노출.
+      let corr = "";
+      for (const c of (a.correlations || [])) {
+        corr += '<div class="corr"><span class="ct">' + c.type + "</span> · " + c.label + "</div>";
+      }
+      const done = a.status !== "candidate";
+      box.innerHTML =
+        '<div class="d-expl">' + a.explanation + "</div>" +
+        '<div class="d-sect">근거 (evidence · provenance)</div>' + (ev || evObj || "—") +
+        (ev && evObj ? evObj : "") +
+        (corr ? '<div class="d-sect">교차소스 상관 (correlated_with)</div>' + corr : "") +
+        '<div class="actions">' +
+        '<button class="btn-confirm" ' + (done ? "disabled" : "") +
+        ' onclick="act(\'' + a.id + "','confirm')\">확인 (confirm)</button>" +
+        '<button class="btn-dismiss" ' + (done ? "disabled" : "") +
+        ' onclick="act(\'' + a.id + "','dismiss')\">기각 (dismiss)</button>" +
+        "</div>" +
+        '<div class="backend">설명 백엔드: ' + (a.explainer_backend || "—") +
+        " · 상태: " + (STATUS_LABEL[a.status] || a.status) + "</div>";
+    }
+
+    function selectAnomaly(id) {
+      selectedId = id;
+      const a = lastAnomalies.find((x) => x.id === id);
+      if (a && a.lat != null && a.lon != null) {
+        map.setView([a.lat, a.lon], Math.max(map.getZoom(), 8), { animate: true });
+        const m = anomMarkers[id];
+        if (m) m.openTooltip();
+      }
+      drawAnomalies(lastAnomalies);   // 선택 강조 반영
+      renderTimeline(lastAnomalies);
+      renderDetail();
+    }
+
+    // confirm/dismiss → POST → 즉시 재조회 반영
+    async function act(id, action) {
+      try {
+        await postJSON("/api/anomalies/" + encodeURIComponent(id) + "/" + action);
+        await refresh();
+      } catch (e) {
+        alert("액션 실패: " + e.message);
+      }
+    }
+    window.act = act;
+
+    async function refresh() {
+      try {
+        const [regions, tracks, obs, anomalies, passes, weather, news, counts] =
+          await Promise.all([
+            getJSON("/api/regions"),
+            getJSON("/api/tracks"),
+            getJSON("/api/observations"),
+            getJSON("/api/anomalies"),
+            getJSON("/api/orbitpasses"),
+            getJSON("/api/weather"),
+            getJSON("/api/news"),
+            getJSON("/api/counts"),
+          ]);
+        lastAnomalies = anomalies;
+        lastPasses = passes;
+        // 선택 항목이 없거나 사라졌으면 최신 이상징후를 자동 선택(위협 보드 기본 뷰).
+        if (anomalies.length && !anomalies.some((x) => x.id === selectedId)) {
+          selectedId = anomalies[0].id;
+        }
+        drawRegions(regions);
+        drawTracks(tracks);
+        drawOrbitPasses(passes);
+        drawAircraft(obs);
+        drawAnomalies(anomalies);
+        renderTimeline(anomalies);
+        renderDetail();
+        drawWeather(weather);
+        drawNews(news);
+        drawSourceCounts(counts);
+        document.getElementById("stamp").textContent =
+          "갱신 " + new Date().toLocaleTimeString("ko-KR");
+      } catch (e) {
+        document.getElementById("stamp").textContent = "갱신 실패: " + e.message;
+      }
+    }
+
+    // 위성 궤적 토글 — 즉시 재그리기(재fetch 없이 마지막 데이터로).
+    document.getElementById("tog-sat").addEventListener("change", (ev) => {
+      showSat = ev.target.checked;
+      drawOrbitPasses(lastPasses);
+    });
+
+    // ════════════════════════════════════════════════════════════
+    // P4 코파일럿: 채팅 · 문장별 cites 배지 · 서브그래프 뷰
+    // ════════════════════════════════════════════════════════════
+    let lastAssessment = null;                       // 마지막 /api/assess 응답
+    let citeLayer = L.layerGroup().addTo(map);       // cite 클릭 하이라이트 마커
+
+    const KIND_META = {
+      summary:     ["요약",   "#234b6e", "#a9d4ff"],
+      anomaly:     ["이상징후", "#5a1414", "#ff9a9a"],
+      correlation: ["상관",   "#3a2a5a", "#c9b0ff"],
+      satellite:   ["위성",   "#123a3a", "#8fe4e4"],
+      weather:     ["기상",   "#183a52", "#8fc9ff"],
+      news:        ["뉴스",   "#3a2a12", "#ffc078"],
+    };
+
+    const DEMO_QUERIES = [
+      "지금 KADIZ 근방 이상한 거 있어?",
+      "최근 1시간 위성 통과랑 겹치는 이상징후는?",
+      "서해 쪽 기상이랑 뉴스 맥락 요약해줘",
+    ];
+    function renderQuickButtons() {
+      const q = document.getElementById("chat-quick");
+      q.innerHTML = "";
+      for (const dq of DEMO_QUERIES) {
+        const b = document.createElement("button");
+        b.textContent = dq;
+        b.onclick = () => { document.getElementById("chat-input").value = dq; submitChat(); };
+        q.appendChild(b);
+      }
+    }
+
+    async function submitChat() {
+      const inp = document.getElementById("chat-input");
+      const q = inp.value.trim();
+      if (!q) return;
+      const body = document.getElementById("chat-body");
+      body.innerHTML = '<div class="empty">질의 처리 중… (병렬 온톨로지 read → 문장 조립)</div>';
+      try {
+        const r = await fetch("/api/assess", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: q }),
+          cache: "no-store",
+        });
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        lastAssessment = await r.json();
+        renderAnswer(lastAssessment);
+        document.getElementById("sg-open").disabled = !lastAssessment.assessment_id;
+      } catch (e) {
+        body.innerHTML = '<div class="empty">질의 실패: ' + e.message + "</div>";
+      }
+    }
+    window.submitChat = submitChat;
+    document.getElementById("chat-input").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") submitChat();
+    });
+
+    function citeChip(id) {
+      const obj = (lastAssessment && lastAssessment.cited_objects &&
+        lastAssessment.cited_objects[id]) || null;
+      const type = obj ? obj.type : "";
+      const label = obj ? obj.label : id;
+      return '<span class="cite-chip t-' + type + '" title="' + id +
+        '" onclick="highlightCite(\'' + id + '\')">' + label + "</span>";
+    }
+
+    function renderAnswer(d) {
+      const body = document.getElementById("chat-body");
+      const w = d.window || {};
+      const defaulted = (w.defaulted && w.defaulted.length)
+        ? " · 기본값 사용: " + w.defaulted.join(",") : "";
+      let html =
+        '<div class="parsed">해석(투명성): 지역 <b>' + (d.region ? d.region.name : "—") +
+        "</b> · 시간창 <b>" + (w.label || "—") + "</b> (" +
+        (w.start_iso || "") + " ~ " + (w.end_iso || "") + ")" + defaulted +
+        " · 소스 히트: 항적 " + d.counts.flights + "/이상 " + d.counts.anomalies +
+        "/통과 " + d.counts.passes + "/기상 " + d.counts.weather +
+        "/뉴스 " + d.counts.news + "</div>";
+
+      if (d.no_evidence) {
+        html += '<div class="a-sent" style="border-left-color:#6b7a8d">' +
+          '<div class="a-text">' + d.summary + "</div></div>";
+        body.innerHTML = html;
+        return;
+      }
+
+      html += '<div class="a-head"><span class="kind-badge" style="background:#123a2a;color:#7ce0a8">' +
+        "종합 신뢰도 " + d.confidence.toFixed(2) + '</span>' +
+        '<span class="conf">서술: ' + d.produced_by + " · 문장 " + d.sentences.length +
+        "개 · 전부 근거(cites) 보유</span></div>";
+
+      for (const s of d.sentences) {
+        const meta = KIND_META[s.kind] || ["", "#2a3f57", "#9fc4e8"];
+        let chips = "";
+        for (const c of s.cites) chips += citeChip(c) + " ";
+        html +=
+          '<div class="a-sent" style="border-left-color:' + meta[1] + '">' +
+          '<div class="a-text">' + s.text + "</div>" +
+          '<div class="a-foot">' +
+          '<span class="kind-badge" style="background:' + meta[1] + ";color:" + meta[2] +
+          '">' + meta[0] + "</span>" +
+          '<span class="cite-chip" style="cursor:default;border-color:#1c3a2a;color:#7ce0a8">신뢰도 ' +
+          s.confidence.toFixed(2) + "</span>" +
+          chips +
+          "</div></div>";
+      }
+      body.innerHTML = html;
+    }
+
+    // cite 배지 클릭 → 지도 하이라이트(+원 소스). 좌표 없는 근거(뉴스 등)는 원문 링크로.
+    function highlightCite(id) {
+      const obj = (lastAssessment && lastAssessment.cited_objects &&
+        lastAssessment.cited_objects[id]) || null;
+      if (!obj) return;
+      citeLayer.clearLayers();
+      if (obj.lat != null && obj.lon != null) {
+        map.setView([obj.lat, obj.lon], Math.max(map.getZoom(), 7), { animate: true });
+        let html = "<b>" + obj.label + "</b><br><span style='color:#8aa'>" + obj.type + "</span>";
+        if (obj.source_url) html +=
+          "<br><a href='" + obj.source_url + "' target='_blank' rel='noopener'>원 소스 →</a>";
+        L.circleMarker([obj.lat, obj.lon], {
+          radius: 17, color: "#ffffff", weight: 3,
+          fillColor: "#7ce0a8", fillOpacity: 0.30,
+        }).addTo(citeLayer).bindPopup(html).openPopup();
+      } else if (obj.source_url) {
+        window.open(obj.source_url, "_blank", "noopener");
+      }
+    }
+    window.highlightCite = highlightCite;
+
+    // ── 서브그래프 (자체 SVG 방사형 레이아웃, 외부 라이브러리 없음) ──
+    const SVGNS = "http://www.w3.org/2000/svg";
+    const NODE_COLOR = {
+      SituationAssessment: "#7ce0a8", Anomaly: "#ff5a5a", Observation: "#ffd166",
+      OrbitPass: "#38d9d9", WeatherState: "#6fb4ff", NewsEvent: "#b79bff",
+      Aircraft: "#ffb454",
+    };
+    const NODE_R = {
+      SituationAssessment: 16, Anomaly: 11, Observation: 6, OrbitPass: 8,
+      WeatherState: 8, NewsEvent: 8, Aircraft: 7,
+    };
+
+    async function openSubgraph() {
+      if (!lastAssessment || !lastAssessment.assessment_id) return;
+      try {
+        const sg = await getJSON("/api/subgraph?assessment_id=" +
+          encodeURIComponent(lastAssessment.assessment_id));
+        document.getElementById("sg-title").textContent =
+          (lastAssessment.region ? lastAssessment.region.name : "") + " · " +
+          (lastAssessment.window ? lastAssessment.window.label : "");
+        document.getElementById("sg-modal").classList.add("open");
+        renderSubgraph(sg);
+        renderSgLegend();
+      } catch (e) {
+        alert("서브그래프 실패: " + e.message);
+      }
+    }
+    function closeSubgraph() {
+      document.getElementById("sg-modal").classList.remove("open");
+    }
+    window.openSubgraph = openSubgraph;
+    window.closeSubgraph = closeSubgraph;
+
+    function renderSgLegend() {
+      const el = document.getElementById("sg-legend");
+      const types = ["SituationAssessment","Anomaly","Observation","OrbitPass","WeatherState","NewsEvent","Aircraft"];
+      const label = { SituationAssessment:"상황평가", Anomaly:"이상징후", Observation:"관측",
+        OrbitPass:"위성통과", WeatherState:"기상", NewsEvent:"뉴스", Aircraft:"항공기" };
+      el.innerHTML = types.map((t) =>
+        '<span><i style="background:' + NODE_COLOR[t] + '"></i>' + label[t] + "</span>").join("") +
+        '<span style="margin-left:auto">엣지: aggregates(빨강)·cites(파랑)·evidenced_by/involves(깊이)·' +
+        '<span style="color:#38d9d9">correlated_with(청록 점선)</span></span>';
+    }
+
+    function renderSubgraph(sg) {
+      const svg = document.getElementById("sg-svg");
+      while (svg.firstChild) svg.removeChild(svg.firstChild);
+      const W = svg.clientWidth || 760, H = svg.clientHeight || 540;
+      const cx = W / 2, cy = H / 2;
+
+      const childrenOf = {};
+      for (const e of sg.edges) (childrenOf[e.src] = childrenOf[e.src] || []).push(e.dst);
+      const pos = {};
+      pos[sg.center] = [cx, cy];
+      const R1 = Math.min(W, H) * 0.27, R2 = Math.min(W, H) * 0.43;
+      const l1 = childrenOf[sg.center] || [];
+      l1.forEach((id, i) => {
+        const a = -Math.PI / 2 + (i / Math.max(1, l1.length)) * 2 * Math.PI;
+        pos[id] = [cx + R1 * Math.cos(a), cy + R1 * Math.sin(a)];
+      });
+      // 2홉: 각 1홉 노드의 자식을 부모 각도 주변에 퍼뜨림
+      l1.forEach((pid, i) => {
+        const base = -Math.PI / 2 + (i / Math.max(1, l1.length)) * 2 * Math.PI;
+        const kids = (childrenOf[pid] || []).filter((k) => pos[k] === undefined);
+        kids.forEach((k, j) => {
+          const spread = (j - (kids.length - 1) / 2) * 0.26;
+          const a = base + spread;
+          pos[k] = [cx + R2 * Math.cos(a), cy + R2 * Math.sin(a)];
+        });
+      });
+      let extra = 0;
+      for (const n of sg.nodes) if (pos[n.id] === undefined) {
+        const a = extra * 0.6; pos[n.id] = [cx + R2 * Math.cos(a), cy + R2 * Math.sin(a)]; extra++;
+      }
+
+      // 엣지 먼저(노드 밑에 깔림)
+      for (const e of sg.edges) {
+        const s = pos[e.src], t = pos[e.dst];
+        if (!s || !t) continue;
+        const line = document.createElementNS(SVGNS, "line");
+        line.setAttribute("x1", s[0]); line.setAttribute("y1", s[1]);
+        line.setAttribute("x2", t[0]); line.setAttribute("y2", t[1]);
+        line.setAttribute("class", "sg-edge l-" + e.link_type);
+        svg.appendChild(line);
+        const lbl = document.createElementNS(SVGNS, "text");
+        lbl.setAttribute("x", (s[0] + t[0]) / 2); lbl.setAttribute("y", (s[1] + t[1]) / 2 - 2);
+        lbl.setAttribute("text-anchor", "middle"); lbl.setAttribute("class", "sg-elabel");
+        lbl.textContent = e.link_type;
+        svg.appendChild(lbl);
+      }
+      // 노드
+      const nodeById = {};
+      for (const n of sg.nodes) nodeById[n.id] = n;
+      for (const n of sg.nodes) {
+        const p = pos[n.id]; if (!p) continue;
+        const g = document.createElementNS(SVGNS, "g");
+        g.setAttribute("class", "sg-node"); g.setAttribute("data-id", n.id);
+        const c = document.createElementNS(SVGNS, "circle");
+        c.setAttribute("cx", p[0]); c.setAttribute("cy", p[1]);
+        c.setAttribute("r", NODE_R[n.type] || 7);
+        c.setAttribute("fill", NODE_COLOR[n.type] || "#8aa");
+        g.appendChild(c);
+        const t = document.createElementNS(SVGNS, "text");
+        t.setAttribute("x", p[0]); t.setAttribute("y", p[1] + (NODE_R[n.type] || 7) + 10);
+        t.setAttribute("text-anchor", "middle"); t.setAttribute("class", "sg-nlabel");
+        t.textContent = clip(n.label, 22);
+        g.appendChild(t);
+        g.addEventListener("click", () => selectSgNode(n));
+        svg.appendChild(g);
+      }
+    }
+
+    function clip(s, n) { s = s || ""; return s.length <= n ? s : s.slice(0, n - 1) + "…"; }
+
+    function selectSgNode(n) {
+      document.querySelectorAll(".sg-node").forEach((el) =>
+        el.classList.toggle("sel", el.getAttribute("data-id") === n.id));
+      const d = document.getElementById("sg-detail");
+      let html = "<div><b style='color:" + (NODE_COLOR[n.type] || "#fff") + "'>" +
+        n.type + "</b></div><div style='margin:4px 0 8px'>" + n.label + "</div>";
+      html += '<div class="k">id</div><div style="word-break:break-all">' + n.id + "</div>";
+      if (n.status) html += '<div class="k" style="margin-top:6px">상태</div><div>' + n.status + "</div>";
+      if (n.confidence != null) html += '<div class="k" style="margin-top:6px">신뢰도</div><div>' +
+        n.confidence + "</div>";
+      if (n.source_url) html += '<div class="k" style="margin-top:6px">원 소스</div>' +
+        "<a href='" + n.source_url + "' target='_blank' rel='noopener'>" + n.source_url + "</a>";
+      if (n.lat != null && n.lon != null) {
+        html += '<div class="k" style="margin-top:6px">위치</div><div>' +
+          n.lat.toFixed(3) + ", " + n.lon.toFixed(3) + "</div>";
+        html += "<div style='margin-top:8px'><button class='sg-open' onclick=\"highlightCite('" +
+          n.id + "')\">지도에서 보기</button></div>";
+      }
+      d.innerHTML = html;
+    }
+
+    document.getElementById("sg-modal").addEventListener("click", (e) => {
+      if (e.target.id === "sg-modal") closeSubgraph();
+    });
+    renderQuickButtons();
+
+    // 이상징후 유형 범례 (P5 5종 색 매핑).
+    (function renderTypeLegend() {
+      const el = document.getElementById("type-legend");
+      if (!el) return;
+      el.innerHTML = Object.keys(TYPE_LABEL).map((t) =>
+        '<span class="tchip"><i style="background:' + TYPE_COLOR[t] + '"></i>' +
+        (TYPE_ICON[t] || "") + TYPE_LABEL[t] + "</span>").join("");
+    })();
+
+    // 딥링크: ?q=질의 → 자동 질의, &sg=1 → 서브그래프 자동 오픈.
+    // 공유 가능한 질의 링크 + 헤드리스 스크린샷 재현용(실 기능이지 데모 전용 훅 아님).
+    (async () => {
+      const params = new URLSearchParams(location.search);
+      const q = params.get("q");
+      if (!q) return;
+      document.getElementById("chat-input").value = q;
+      await submitChat();
+      if (params.get("sg") === "1") openSubgraph();
+    })();
+
+    refresh();
+    setInterval(refresh, 30000); // 30초 자동 갱신
+  </script>
+</body>
+</html>
