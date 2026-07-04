@@ -536,3 +536,68 @@ create-news-event.`newsEvents`·create-situation-assessment.`situationAssessment
 5. confirm/dismiss-anomaly — 지금도 정상(status 전이).
 
 **핵심 3줄 요약**: ⓐ D-2·D-3·D-5·D-6 **해소**(set-alert Modify화, 신규7타입 PK+dedup, composed_of, self-link 해제). ⓑ D-4 **부분**(of·Track→AC·Weather→Region·Assessment→Region 4종 traverse OK / over 미형성·within 채움불가 2종 잔존). ⓒ **★D-1 부분** — evidence 파라미터 신설·필수화·거부검증은 됐으나(진전) **create-anomaly가 ApplyActionFailed 재발 + half-Anomaly + evidenced_by 엣지 불안정**(범인=미제거된 required objectSet `newParameter1`) → **데모 provenance 백본은 여전히 미완, UI 재수정 최우선**. OSDK 0.5.0은 delete-orbit-pass·editrack 포함(진전)이나 set-region-alert-level 누락.
+
+---
+
+## 12. D-1 최종 재검증 (2026-07-04, opus 서브에이전트)
+
+사용자가 D-1 수정(create-anomaly의 `newParameter1` 제거) + OSDK 재발행(0.5.0→**0.6.0**)을 마쳤다고 하여 **최종 실측 재검증**. 저수준 `foundry_sdk` 1.97.0 라이브 introspection + create-anomaly EXECUTE 왕복(3회 반복 + 3변형 진단, 매건 delete 정리). **Foundry 오염 0** (모든 iteration delta 0, 최종 카운트 Aircraft 6·Observation 3·Anomaly 0·Region 0 = 세션 baseline).
+
+**검증 산출물**: `scripts/p7_full_introspect.py`(재사용), `scripts/p7_d1_final.py`(신규, D-1 evidence 강제 EXECUTE+traverse).
+
+### 12-0. 종합 판정 — **★D-1 부분 해소(그래프 재현 가능 / 액션 spurious error 잔존)**. §10 대비 실질 진전.
+
+`newParameter1` 제거로 **evidenced_by 엣지가 §10의 "불안정/빈 half-Anomaly"에서 "안정적 완전 Anomaly"로 개선**됐다. 그러나 §10이 지목한 "범인 newParameter1"을 제거해도 **create-anomaly EXECUTE는 여전히 ApplyActionFailed(non-fatal)를 던진다** → **ApplyActionFailed의 진짜 원인은 newParameter1이 아니었다**. 다만 이 에러는 데이터를 손상시키지 않는다(Anomaly 스칼라 + evidenced_by 엣지 + involves 모두 정상 커밋).
+
+### 12-1. create-anomaly 최종 파라미터 (introspection)
+
+`type·ts·lat·lon`(req) / `observations`(**object=Observation 단일, required** — 근거) / `confidence·status·explanation`(opt) / `aircraft·newsEvents·orbitPasses`(opt object) / `newParameter`(=anomalyId PK, req).
+
+- **`newParameter1` 제거 확인** ✓ (§10의 required objectSet<Observation> orphan 삭제됨).
+- **`evidence`(string 스칼라) 제거 확인** ✓ (§10의 그래프 무의미 스칼라 삭제됨).
+- 근거 경로는 **단일 `observations`(req) 하나로 정리**됨 — §10-7 A-1 권고대로.
+
+### 12-2. ★★ evidence 강제 최종 판정
+
+| 검증 항목 | 결과 | 근거 |
+|---|---|---|
+| **evidence 없이 거부되나** | **OK (거부됨)** | `observations` 생략 시 VALIDATE=**INVALID**. 근거 없는 Anomaly = provenance 강제 ✓ |
+| **evidence 포함 → ApplyActionFailed 재발?** | **예 (잔존)** | EXECUTE 시 매번 `BadRequestError / INVALID_ARGUMENT / ApplyActionFailed / parameters:{}`. VALIDATE는 VALID인데 EXECUTE만 실패 |
+| **그러나 Anomaly 완전 생성?** | **예** | 스칼라(anomalyId·status=candidate·confidence·type·explanation) read-back 전부 정상 |
+| **evidenced_by→Observation traverse** | **OK (안정)** | `Anomaly.observations → [근거 obs]` **양방향** 형성(역방향 `Observation.anomalies → [anomaly]`도). **3회 반복 + 3변형 = 6/6 전부 형성**(§10 "불안정"과 반대) |
+| **half-Anomaly?** | **해소** | §10은 스칼라만/엣지 빈 반쪽. 지금은 스칼라 + evidenced_by 엣지 + (aircraft 주면) involves 엣지까지 완전 |
+
+### 12-3. ApplyActionFailed 원인 좁히기 (진단 3변형)
+
+`observations`만 / `+aircraft(optional)` / `+confidence·status·explanation` **세 변형 모두** ApplyActionFailed 발생 + Anomaly 완전 생성 + evidenced_by 엣지 형성(aircraft 주면 involves 엣지도 `['847114']` 형성). → **에러는 어떤 optional 파라미터 때문이 아니라 create-anomaly 액션 규칙 자체의 후처리(post-edit 함수/알림/부가규칙 추정)에서 발생**하며, 모든 edit이 커밋된 뒤 터져 데이터에 무해(non-atomic·spurious). = **UI 액션 config 문제**(코드로 회피 가능: catch 후 read-back 성공 판정).
+
+### 12-4. D-4 잔여 재확인 (§10 대비 변동 없음)
+
+- **over (OrbitPass→Region)**: **잔존(미형성)**. OrbitPass outgoing 링크 = anomalies·satellite·situationAssessments뿐. regionId 속성만 있고 링크 미지정.
+- **within (Observation→Region)**: **부분(구조만)**. `Observation.region`(fk=regionId) 링크는 형성됐으나 **create/edit-observation 어느 쪽에도 regionId 파라미터가 없어 채울 수 없음**(edit-observation 파라미터 재확인: regionId 없음). traverse=[].
+- (데모 필수 아님 — 상태만 기록.)
+
+### 12-5. OSDK 0.6.0 재발행물 (`skai_osdk_sdk` 0.5.0 → **0.6.0**, FOUNDRY_OSDK_INDEX 재설치, pip 로그 토큰 스크럽)
+
+- **Object 클래스 11개**(변동 없음).
+- **Action 메서드 36개**: create×11·edit×11·delete×11·editrack·confirm_anomaly·dismiss_anomaly. delete-orbit-pass·editrack **포함**(진전 유지).
+- **⚠️ `set-region-alert-level` OSDK 0.6.0에도 여전히 누락**(live 37 vs OSDK 36). §10에서 지적된 0.5.0 누락분이 재발행에 **미반영**. set-region-alert-level 자체는 라이브 스키마·저수준 SDK로 정상 작동(D-2 Modify 규칙 확인) = 스키마 아닌 **발행 갭 지속**. 코드가 OSDK 타입드로 set-alert 부르려면 저수준 SDK 폴백 필요.
+
+### 12-6. 데모 provenance 백본 Foundry 재현 — **조건부 가능**
+
+- **그래프/데이터 관점: 가능.** evidence 강제(거부검증 INVALID) + Observation 근거 → Anomaly `evidenced_by` 엣지 **안정 양방향 형성** + `involves`(aircraft) 형성 + traverse 정상 + Foundry 오염 0. **§10의 "재현 불가"에서 실질 전환.** ontology.md §3·§4 provenance 서사(관측 근거→이상징후, 근거 역추적)를 Foundry 그래프로 재현·traverse 가능.
+- **액션 UX 관점: 흠 잔존.** create-anomaly가 매 EXECUTE마다 non-fatal ApplyActionFailed를 반환 → 데모 버튼이 raw error를 노출하면 흠. **코드 회피 가능**: store_foundry의 `write_anomaly`가 ApplyActionFailed를 catch하고 read-back(객체 존재 + evidenced_by 엣지)으로 성공 판정하면 데모 백본 완성(§10에선 엣지가 불안정해 이 회피조차 불가였음 — 지금은 엣지가 안정이라 read-back 판정이 신뢰 가능).
+
+### 12-7. 남은 갭 (우선순위)
+
+**A. 사용자 UI 작업 (Ontology Manager):**
+1. **[선택·데모 품질] create-anomaly ApplyActionFailed 제거** — 액션 규칙의 후처리(부가 add-link 규칙/함수/알림) 점검. 데이터는 무손상이므로 데모 필수는 아니나, 버튼 raw error 제거하면 깔끔. (VALIDATE=VALID·EXECUTE만 실패 → 실행 단계 부가규칙이 원인.)
+2. **over(OrbitPass→Region) 링크 지정** + **within 채움 수단**(create/edit-observation에 regionId 파라미터) — §10 잔여, 데모 필수 아님.
+3. **OSDK 재발행 시 set-region-alert-level 포함**(0.5.0·0.6.0 연속 누락).
+4. (권장·D-7 잔여) `newParameter`→PK명 리네임, edit-aircraft.isMilitary string→boolean, editrack↔edit-track 중복.
+
+**B. 코드측 (store_foundry.py — 이번 세션 미수정, 별도 에이전트 작업 중이라 read-only):**
+1. `write_anomaly` — **지금 배선 가능**: anomalyId PK + observations(근거 obs PK) + confidence/status/explanation. **단 create-anomaly의 spurious ApplyActionFailed를 catch + read-back 검증으로 성공 처리** 필요(에러 무시하되 엣지 형성 확인). §10 "불가"에서 "가능(에러 흡수 조건)"으로 전환.
+2. `set_region_alert_level` 호출부 — 저수준 SDK로 정상(OSDK 0.6.0 누락 → 저수준 폴백).
+
+**핵심 3줄 요약**: ⓐ **★D-1 부분 해소** — `newParameter1` 제거로 evidenced_by 엣지가 **불안정→안정 완전 형성**(6/6), half-Anomaly 해소, evidence 없으면 거부(provenance 강제). **그러나 create-anomaly EXECUTE는 여전히 ApplyActionFailed(non-fatal, 데이터 무손상)를 던짐** → 범인은 newParameter1이 아니었음이 판명. ⓑ **데모 provenance 백본 = 조건부 재현 가능** — 그래프/traverse는 완전 재현, 남은 것은 액션의 spurious error뿐이고 코드에서 read-back으로 흡수하면 데모 백본 완성(§10 "재현 불가"에서 실질 전환). ⓒ D-4 over·within 잔존(데모 필수 아님), OSDK 0.6.0은 set-region-alert-level 여전히 누락(발행 갭 지속), Foundry 오염 0.
