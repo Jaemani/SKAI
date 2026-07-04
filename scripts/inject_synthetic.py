@@ -20,6 +20,8 @@ source="synthetic", source_url="synthetic://..." → validate_provenance 통과 
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 import time
 
 import time as _time
@@ -103,6 +105,35 @@ def inject_scenario(store: LocalOntologyStore, scenario_id: str, now: int) -> di
     return scan_and_create_all(store, now=now, crosscheck=merged_mirror)
 
 
+def _is_live_runtime_db(path: str) -> bool:
+    """대상 db가 라이브 런타임 db(DEFAULT_DB = data/skai.db)인지 판정.
+
+    심볼릭·상대경로 차이를 흡수하려 realpath로 정규화 비교한다.
+    """
+    try:
+        return os.path.realpath(path) == os.path.realpath(DEFAULT_DB)
+    except OSError:
+        return path == DEFAULT_DB
+
+
+def _guard_live_db(db_path: str, allow: bool) -> None:
+    """레짐 가드 — 라이브 런타임 db에 합성 주입 시 명시 승인 강제 (db-regime.md).
+
+    skai.db는 '실데이터 전용' 레짐이다. 합성 주입기가 아무 승인 없이 skai.db를 타깃하면
+    (예: --db 미지정 → DEFAULT_DB) 라이브 db가 재오염된다. --allow-live-db 없으면 거부하고,
+    합성은 데모 db로 분리(--db data/demo/...)하거나 의도적 데모 augment면 승인하도록 안내한다.
+    """
+    if _is_live_runtime_db(db_path) and not allow:
+        print(
+            "거부: 합성 주입 대상이 라이브 런타임 db(data/skai.db)입니다.\n"
+            "  레짐(db-regime.md): skai.db=실데이터 전용. 합성 주입은 이 db를 오염시킵니다.\n"
+            "  → 순수 합성이면:   --db data/demo/skai_demo.db (또는 다른 데모 db)\n"
+            "  → 의도적 데모 서사 augment(live --inject)면: --allow-live-db 를 명시.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(
         description="합성 이상징후 주입기 (P2 스쿽 + P5 시나리오)"
@@ -127,7 +158,16 @@ def main() -> None:
         default=None,
         help="시나리오 now 앵커(기본 벽시계). '지금' 질의창에 맞추려면 현재 시각.",
     )
+    p.add_argument(
+        "--allow-live-db",
+        action="store_true",
+        help="라이브 런타임 db(data/skai.db)에 합성을 주입하는 것을 명시 승인. "
+        "레짐 가드(db-regime.md): skai.db=실데이터 전용. 데모 서사 augment(live --inject) "
+        "같은 의도적 경우에만 사용. 순수 합성은 --db data/demo/... 로 분리하라.",
+    )
     args = p.parse_args()
+
+    _guard_live_db(args.db, args.allow_live_db)
 
     store = LocalOntologyStore(args.db)
 

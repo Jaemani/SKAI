@@ -18,8 +18,14 @@
 #                      OpenSky-only 회귀는 SKAI_POLL_SOURCES=opensky.
 #   LIVE_MAX_CYCLES    live 폴러 사이클 수. 기본 0=연속(무한, DR-0011). 유한값은 검증용.
 #
-# 격리: replay는 data/demo/skai_demo.db(런타임 data/skai.db와 분리). replay는 SKAI_OFFLINE=1로
-# 외부 egress를 소켓 레벨 차단(network 0 증명). 재생 질의는 web 프리셋 3개와 동일하다.
+# DB 레짐(3분리 — docs/worklog/db-regime.md SSOT):
+#   data/skai.db                  = 라이브 런타임(실데이터 전용). live 폴러가 씀. 합성 주입 금지
+#                                   (inject_synthetic 레짐 가드가 --allow-live-db 없이는 거부).
+#   data/demo/skai_demo.db        = replay 결정적 합성(매 replay 재생성 — 같은 앵커=같은 산출).
+#   data/demo/skai_foundry_local.db = demo_foundry 로컬 미러(skaidemo 합성, Foundry와 dual-write).
+# 격리: replay는 skai_demo.db(런타임 skai.db와 분리) + SKAI_OFFLINE=1로 외부 egress를 소켓 레벨
+# 차단(network 0 증명). 재생 질의는 web 프리셋 3개와 동일하다. live --inject만 데모 서사 1건을
+# skai.db에 얹으며(의도적), 이때만 레짐 가드를 --allow-live-db로 명시 승인한다.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -135,8 +141,11 @@ live() {
   if [ "$inject" = "yes" ]; then
     local now; now="$(date +%s)"
     echo "내러티브 합성 주입(narrative_hidden · now=$now) → $live_db"
+    # --allow-live-db: 라이브 db 합성 주입은 레짐 가드(db-regime.md)로 명시 승인 필요.
+    # live --inject는 '실 라이브 + 데모 서사 1건' 의도적 모드이므로 여기서만 승인한다.
     SKAI_DB="$live_db" "$PY" -m scripts.inject_synthetic \
-      --scenario narrative_hidden --now "$now" --db "$live_db" | sed 's/^/  /' || true
+      --scenario narrative_hidden --now "$now" --db "$live_db" --allow-live-db \
+      | sed 's/^/  /' || true
   else
     echo "순수 라이브: 합성 주입 없음(실데이터만). 데모 서사가 필요하면 'live --inject'."
   fi

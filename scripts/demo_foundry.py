@@ -302,6 +302,14 @@ def run() -> int:
     )
     cleanup_demo_assets(fs)  # 직전 데모 자산 정리(누적 방지)
 
+    # disjoint 해소(db-regime.md): 로컬 미러(skai_foundry_local.db)가 자연 assess 흐름에
+    # 자립하도록 KADIZ region을 로컬에 심는다. foundry 모드 assess는 anomaly·region을 로컬에서
+    # 읽으므로(HybridStore 설계), region이 없으면 지역명이 id('KADIZ') 폴백된다. 관측·기체는
+    # Foundry 소재라 여기 로컬엔 없어도 됨(assess가 Foundry에서 읽음). write_region은 로컬 전용.
+    from ontology.model import KADIZ_REGION
+
+    store.write_region(KADIZ_REGION)
+
     a_ok = phase_a_ingest(store, fs)  # OpenSky 실패해도 계속
     aid = phase_b_anomaly(store, fs)
     c_ok = phase_c_confirm(store, fs, aid) if aid else False
