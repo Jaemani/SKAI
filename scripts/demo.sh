@@ -3,15 +3,19 @@
 #
 #   scripts/demo.sh replay   네트워크 0 재생 — 데모 전용 DB에 선언적 시나리오 전체 주입 +
 #                            now 앵커링 + 서버만 기동. 오프라인에서도 즉시 동작(발표 기본).
-#   scripts/demo.sh live     라이브 — OpenSky 폴러 + 서버 기동(실 API) + 내러티브 합성 가미.
-#                            네트워크·API 정상일 때 임팩트용 오프닝.
+#   scripts/demo.sh live     순수 라이브 — 다중소스 연속 폴러(항적+뉴스+기상+위성) + 서버 기동.
+#                            실 API 데이터만. 합성 주입 없음(DR-0012 갭#3: 순수 라이브 분리).
+#   scripts/demo.sh live --inject  라이브 + 내러티브 합성 1건 주입(데모 서사 보장용).
+#                            라이브 항적은 재현성 있는 이상징후가 상시 없으므로 발표 임팩트용.
 #   scripts/demo.sh stop     두 모드의 모든 프로세스 중지 + pid 정리.
 #   scripts/demo.sh status   실행 상태.
 #
 # 환경변수(선택):
 #   SKAI_PORT          서버 포트. 기본 8000.
 #   SKAI_DEMO_ANCHOR   replay now 앵커(초). 기본 = eval.EVAL_NOW(SSOT). 재현성 위해 고정.
-#   SKAI_POLL_INTERVAL live 폴링 간격(초). 기본 25(하한 10). 크레딧 안전.
+#   SKAI_POLL_INTERVAL live base 폴링 간격(초). 기본 25(하한 10). 크레딧 안전.
+#   SKAI_POLL_SOURCES  live 폴링 소스(쉼표구분). 기본 opensky,gdelt,metar,celestrak.
+#                      OpenSky-only 회귀는 SKAI_POLL_SOURCES=opensky.
 #   LIVE_MAX_CYCLES    live 폴러 사이클 수. 기본 0=연속(무한, DR-0011). 유한값은 검증용.
 #
 # 격리: replay는 data/demo/skai_demo.db(런타임 data/skai.db와 분리). replay는 SKAI_OFFLINE=1로
@@ -98,10 +102,18 @@ replay() {
 }
 
 live() {
-  echo "=== LIVE (실 API 폴링 + 내러티브 합성 가미) ==="
+  # $1 == "--inject" 이면 내러티브 합성 1건을 얹는다(데모 서사 보장). 기본은 순수 라이브.
+  local inject="no"
+  if [ "${1:-}" = "--inject" ]; then inject="yes"; fi
+
+  local sources="${SKAI_POLL_SOURCES:-opensky,gdelt,metar,celestrak}"
+  if [ "$inject" = "yes" ]; then
+    echo "=== LIVE (다중소스 실 API 폴링 + 내러티브 합성 1건) ==="
+  else
+    echo "=== LIVE (순수 — 다중소스 실 API 폴링, 합성 없음) ==="
+  fi
   stop
   local live_db="$DATA/skai.db"          # 런타임 DB(데모 DB와 분리)
-  local now; now="$(date +%s)"
 
   # 서버 — 벽시계 now(정직한 '지금', 앵커 없음), 오프라인 아님(라이브 fetch 필요).
   SKAI_DB="$live_db" SKAI_PORT="$PORT" \
@@ -109,18 +121,25 @@ live() {
   echo $! >"$SERVER_PID"
   echo "서버 기동: pid $(cat "$SERVER_PID")  → http://localhost:$PORT"
 
-  # 라이브 연속 폴러(DR-0011). 기본 무한(MAX_CYCLES=0)·간격 25s(하한 10s). stop이 SIGTERM으로
-  # 정리 종료(러너웨이 방지). 사이클마다 last_poll_ts를 사이드카에 기록 → /api/live LIVE 표시.
+  # 다중소스 연속 폴러(DR-0011·DR-0012 갭#3). 항적 매 사이클 + 뉴스5m·기상30m·TLE12h due 폴링.
+  # 기본 무한(MAX_CYCLES=0)·base 간격 25s(하한 10s). stop이 SIGTERM으로 정리 종료(러너웨이 방지).
+  # 사이클마다 last_poll_ts + 소스별 last_poll을 사이드카에 기록 → /api/live LIVE·소스별 신선도.
   SKAI_POLL_INTERVAL="${SKAI_POLL_INTERVAL:-25}" MAX_CYCLES="${LIVE_MAX_CYCLES:-0}" \
+    SKAI_POLL_SOURCES="$sources" \
     SKAI_DB="$live_db" nohup "$PY" -m connectors.opensky >"$POLLER_LOG" 2>&1 &
   echo $! >"$POLLER_PID"
-  echo "연속 폴러 기동: pid $(cat "$POLLER_PID")  interval=${SKAI_POLL_INTERVAL:-25}s max_cycles=${LIVE_MAX_CYCLES:-0}(0=연속) (로그: $POLLER_LOG)"
+  echo "연속 폴러 기동: pid $(cat "$POLLER_PID")  interval=${SKAI_POLL_INTERVAL:-25}s sources=$sources max_cycles=${LIVE_MAX_CYCLES:-0}(0=연속) (로그: $POLLER_LOG)"
 
-  # 내러티브 합성 가미 — 라이브 KADIZ엔 이상징후가 상시 없으므로(재현성) '지금' 창에
-  # 은닉 정황 1건을 주입해 데모 서사를 보장한다(실 항적과 공존). now=현재 시각.
-  echo "내러티브 합성 주입(narrative_hidden · now=$now) → $live_db"
-  SKAI_DB="$live_db" "$PY" -m scripts.inject_synthetic \
-    --scenario narrative_hidden --now "$now" --db "$live_db" | sed 's/^/  /' || true
+  # 내러티브 합성 가미(--inject 시에만) — 라이브 KADIZ엔 이상징후가 상시 없으므로(재현성) '지금'
+  # 창에 은닉 정황 1건을 주입해 데모 서사를 보장한다(실 항적과 공존). now=현재 시각.
+  if [ "$inject" = "yes" ]; then
+    local now; now="$(date +%s)"
+    echo "내러티브 합성 주입(narrative_hidden · now=$now) → $live_db"
+    SKAI_DB="$live_db" "$PY" -m scripts.inject_synthetic \
+      --scenario narrative_hidden --now "$now" --db "$live_db" | sed 's/^/  /' || true
+  else
+    echo "순수 라이브: 합성 주입 없음(실데이터만). 데모 서사가 필요하면 'live --inject'."
+  fi
 
   if _wait_health; then echo "헬스체크 OK"; else echo "경고: 헬스체크 실패"; fi
   _print_deeplinks
@@ -146,8 +165,8 @@ status() {
 
 case "${1:-}" in
   replay) replay ;;
-  live) live ;;
+  live) live "${2:-}" ;;
   stop) stop ;;
   status) status ;;
-  *) echo "사용법: $0 {replay|live|stop|status}"; exit 1 ;;
+  *) echo "사용법: $0 {replay|live [--inject]|stop|status}"; exit 1 ;;
 esac

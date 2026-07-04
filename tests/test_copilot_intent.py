@@ -462,6 +462,99 @@ def test_poller_stop_event_interrupts(tmp_path, monkeypatch):
 
 
 # ──────────────────────────────────────────────
+# 5b. 다중소스 due 스케줄링 (DR-0012 갭#3)
+# ──────────────────────────────────────────────
+def test_resolve_sources_default_and_normalize():
+    # 기본(None) = OpenSky-only(하위호환 — 기존 프로그래밍 호출·테스트 불변).
+    assert opensky.resolve_sources(None) == ["opensky"]
+    # 대소문자·공백 정규화 + 중복 제거 + 알 수 없는 이름 무시.
+    got = opensky.resolve_sources(["OpenSky", " gdelt ", "gdelt", "bogus", "metar"])
+    assert got == ["opensky", "gdelt", "metar"]
+    # opensky 미명시여도 항적은 base 사이클이라 선두로 보장된다.
+    assert opensky.resolve_sources(["gdelt"])[0] == "opensky"
+
+
+def test_due_sources_scheduling():
+    intervals = {"gdelt": 300, "metar": 1800, "celestrak": 43200}
+    sources = ["opensky", "gdelt", "metar", "celestrak"]
+    # 첫 사이클(모두 미폴=0) → 모든 보조 소스 due. opensky는 base 경로라 여기서 제외.
+    now = 1_000_000
+    assert opensky.due_sources({}, now, intervals, sources) == [
+        "gdelt",
+        "metar",
+        "celestrak",
+    ]
+    # 방금 폴한 뒤: gdelt만 5분 경과 → gdelt만 due(metar 30분·celestrak 12h는 아직).
+    last = {"gdelt": now, "metar": now, "celestrak": now}
+    assert opensky.due_sources(last, now + 301, intervals, sources) == ["gdelt"]
+    # 아무 주기도 도래 안 함 → 빈 리스트(OpenSky만 매 사이클 도는 상태).
+    assert opensky.due_sources(last, now + 10, intervals, sources) == []
+
+
+def test_poller_multisource_records_per_source_freshness(tmp_path, monkeypatch):
+    """다중소스 폴러 1사이클: 각 보조 소스 1회 ingest + source_last_poll 기록."""
+    db = str(tmp_path / "multi.db")
+    monkeypatch.setattr(
+        opensky, "fetch_states", lambda c, b: ([_SAMPLE_STATE], "synthetic://o")
+    )
+    called: list[str] = []
+
+    def fake_ingest(src, store):
+        called.append(src)
+        return f"{src}-ok"
+
+    monkeypatch.setattr(opensky, "_ingest_source", fake_ingest)
+    ev = threading.Event()
+    opensky.run_poller(
+        interval=10,
+        max_cycles=1,
+        db_path=db,
+        stop_event=ev,
+        sources=["opensky", "gdelt", "metar", "celestrak"],
+    )
+    # 첫 사이클에 세 보조 소스가 각각 1회 fetch(due) — 실 URL 뉴스 등 원소스 연결 경로.
+    assert set(called) == {"gdelt", "metar", "celestrak"}
+    st = live_status.read_status(db)
+    assert st["mode"] == "stopped"
+    slp = st["source_last_poll"]
+    # 소스별 last_poll_ts가 노출된다(프론트 소스별 신선도 표시용).
+    for s in ("opensky", "gdelt", "metar", "celestrak"):
+        assert slp[s] > 0
+    assert all(v == "ok" for v in st["source_last_status"].values())
+
+
+def test_poller_source_failure_isolated(tmp_path, monkeypatch):
+    """한 보조 소스가 죽어도 루프·타 소스는 지속(실패 개별 격리)."""
+    db = str(tmp_path / "iso.db")
+    monkeypatch.setattr(
+        opensky, "fetch_states", lambda c, b: ([_SAMPLE_STATE], "synthetic://o")
+    )
+
+    def flaky_ingest(src, store):
+        if src == "metar":
+            raise RuntimeError("metar 소스 장애(합성)")
+        return f"{src}-ok"
+
+    monkeypatch.setattr(opensky, "_ingest_source", flaky_ingest)
+    ev = threading.Event()
+    opensky.run_poller(
+        interval=10,
+        max_cycles=1,
+        db_path=db,
+        stop_event=ev,
+        sources=["opensky", "gdelt", "metar"],
+    )
+    st = live_status.read_status(db)
+    # 루프는 정상 종료(러너웨이 아님)하고 카운트도 기록된다.
+    assert st["mode"] == "stopped" and st["cycle"] == 1
+    # 실패 소스만 error·미갱신(last_poll 0 유지), 나머지는 ok·갱신.
+    assert st["source_last_status"]["metar"] == "error"
+    assert st["source_last_poll"]["metar"] == 0
+    assert st["source_last_status"]["opensky"] == "ok"
+    assert st["source_last_poll"]["gdelt"] > 0
+
+
+# ──────────────────────────────────────────────
 # 6. 서버 계약(intent·slots·LIVE)
 # ──────────────────────────────────────────────
 def test_server_assess_and_live(tmp_path, monkeypatch):

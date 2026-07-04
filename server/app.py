@@ -80,6 +80,11 @@ def _live_view() -> dict:
         "cycle": st.get("cycle"),
         "last_poll_status": st.get("last_poll_status"),
         "last_cycle": st.get("last_cycle"),
+        # 다중소스 폴러(DR-0012 갭#3): 소스별 마지막 폴 시각·상태 → 프론트가 소스별 신선도 표시.
+        # 단일소스(구 사이드카)면 None(하위호환) — 프론트는 없으면 전체 last_poll_ts로 폴백.
+        "sources": st.get("sources"),
+        "source_last_poll": st.get("source_last_poll"),
+        "source_last_status": st.get("source_last_status"),
         "server_now": now,
         # read 소스(로컬 SQLite냐 Palantir Foundry냐) — 프론트 "지금 어디서 read 중" 배지용.
         "store_backend": current_backend(),

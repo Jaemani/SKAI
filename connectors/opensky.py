@@ -1,6 +1,6 @@
-"""OpenSky 커넥터 + 폴러 — KADIZ bbox 항적 → 온톨로지.
+"""OpenSky 커넥터 + 다중소스 라이브 폴러 — KADIZ bbox 항적 + 뉴스·기상·위성 → 온톨로지.
 
-파이프: OpenSky states/all(bbox) → Event 정규화(mapping) → Aircraft/Observation write
+파이프(OpenSky): states/all(bbox) → Event 정규화(mapping) → Aircraft/Observation write
         → observed_as 링크 → Track custody 재구성.
 
 P0A gotcha 반영:
@@ -8,13 +8,22 @@ P0A gotcha 반영:
   - x-rate-limit-remaining 헤더 로깅 (익명 크레딧 잔여 감시)
   - states 배열 필드 인덱스는 P0A 실측 기준(mapping.OPENSKY_IDX)
 
-폴링 규율(DR-0011 실시간, 러너웨이 금지):
-  - 연속 루프. 간격 = SKAI_POLL_INTERVAL(기본 25초, 하위호환 POLL_INTERVAL), **하한 10초**
+폴링 규율(DR-0011 실시간, DR-0012 갭#3 다중소스, 러너웨이 금지):
+  - 연속 루프. base 간격 = SKAI_POLL_INTERVAL(기본 25초, 하위호환 POLL_INTERVAL), **하한 10초**
     (크레딧 안전 — 그 미만은 10초로 올린다). bbox는 KADIZ로 한정 유지.
+  - **소스별 due 스케줄링**(DR-0012 갭#3): 항적(OpenSky)은 매 사이클, 뉴스(GDELT) 5분,
+    기상(METAR) 30분, 위성 TLE(Celestrak) 12h — 각 소스의 마지막 폴 이후 주기가 도래한
+    소스만 fetch한다. 각 커넥터의 기존 간격 규율(GDELT 5초 강제·Celestrak 12h 파일 캐시)은
+    그대로 유지된다. StealthMole은 선택(SKAI_POLL_SOURCES에 명시 + 키 있을 때만).
+  - 폴링 소스는 SKAI_POLL_SOURCES(쉼표구분, 기본 opensky,gdelt,metar,celestrak)로 설정.
+    **run_poller() 함수 기본은 OpenSky만**(하위호환 — 미설정 프로그래밍 호출·기존 테스트 불변);
+    다중소스는 main()/커맨드 레이어에서 SKAI_POLL_SOURCES 기본값으로 켠다. OpenSky-only로
+    되돌리려면 SKAI_POLL_SOURCES=opensky.
   - MAX_CYCLES=0 이면 무한(라이브 기본). 유한 값은 검증용(N 사이클 후 종료).
   - **명시 실행 + SIGTERM/SIGINT 정리 종료**로만 돈다(자동 스케줄 없음). 대기는 인터럽트
-    가능(신호 수신 시 현재 사이클 후 즉시 정리). 사이클마다 last_poll_ts를 사이드카에 기록
-    (server.live_status → 프론트 LIVE 인디케이터).
+    가능(신호 수신 시 현재 사이클 후 즉시 정리). 사이클마다 last_poll_ts + 소스별 last_poll을
+    사이드카에 기록(server.live_status → 프론트 LIVE·소스별 신선도 인디케이터).
+  - 각 소스 실패는 개별 격리 — 한 소스가 죽어도 루프는 계속 돌고 로깅만 한다.
 """
 
 from __future__ import annotations
@@ -28,6 +37,7 @@ import httpx
 
 from anomaly.actions import scan_and_create
 from anomaly.explainer import get_explainer
+from connectors import celestrak, gdelt, metar
 from ontology import mapping
 from ontology.custody import rebuild_tracks
 from ontology.model import KADIZ_BBOX, KADIZ_REGION
@@ -38,8 +48,22 @@ from server.live_status import write_status
 OPENSKY_URL = "https://opensky-network.org/api/states/all"
 TIMEOUT = 20
 
-DEFAULT_POLL_INTERVAL = 25  # 라이브 기본 간격(초)
+DEFAULT_POLL_INTERVAL = 25  # 라이브 base 간격(초)
 MIN_POLL_INTERVAL = 10  # 크레딧 안전 하한 — 이 미만은 거부(상향)
+
+# 다중소스 폴링(DR-0012 갭#3) ------------------------------------------------
+# 커맨드 레이어(main/demo.sh live) 기본 소스 — 항적 + 뉴스·기상·위성.
+DEFAULT_LIVE_SOURCES = ("opensky", "gdelt", "metar", "celestrak")
+STEALTHMOLE_POLL_INTERVAL = (
+    30 * 60
+)  # 선택 소스(쿼터 보수적 30분). 커넥터 자체가 키 없으면 no-op.
+# 보조 소스(OpenSky 제외)별 최소 폴 간격(초). 값은 각 커넥터 SSOT를 참조(architecture.md 주기).
+SOURCE_INTERVALS = {
+    "gdelt": gdelt.GDELT_POLL_INTERVAL,  # 뉴스 5분
+    "metar": metar.METAR_POLL_INTERVAL,  # 기상 30분
+    "celestrak": celestrak.TLE_POLL_INTERVAL,  # TLE 12h
+    "stealthmole": STEALTHMOLE_POLL_INTERVAL,  # 선택 30분
+}
 
 # SIGTERM/SIGINT 수신 시 세팅 → 현재 사이클 후 루프 종료(러너웨이 방지).
 _stop_event = threading.Event()
@@ -97,20 +121,93 @@ def ingest_cycle(
     return n_obs, len(icaos), len(new_anomalies)
 
 
+def resolve_sources(sources) -> list[str]:
+    """폴링 소스 리스트 정규화. None → OpenSky-only(하위호환·기존 테스트 불변).
+
+    다중소스는 호출측(main)이 SKAI_POLL_SOURCES 기본값으로 명시 전달한다. opensky는 항상
+    선두(항적은 base 사이클). 알 수 없는 이름은 무시(오타·미지원 소스 방어).
+    """
+    known = {"opensky", *SOURCE_INTERVALS.keys()}
+    if sources is None:
+        return ["opensky"]
+    out: list[str] = []
+    for s in sources:
+        s = s.strip().lower()
+        if s and s in known and s not in out:
+            out.append(s)
+    # 항적은 항상 base 사이클로 돈다 — 명시 안 됐어도 선두 보장(순수 뉴스만 폴링은 비의도).
+    if "opensky" not in out:
+        out.insert(0, "opensky")
+    return out
+
+
+def due_sources(
+    last_poll: dict, now: int, intervals: dict, sources: list[str]
+) -> list[str]:
+    """이번 사이클에 폴할 **보조** 소스(OpenSky 제외) 목록 — 순수 함수(스케줄링 단위 테스트 대상).
+
+    각 보조 소스는 마지막 폴 이후 자기 주기(intervals[src])가 도래했을 때만 due. last_poll에
+    없거나 0이면(아직 미폴) 즉시 due — 라이브 기동 첫 사이클에 각 소스가 1회씩 fetch된다.
+    OpenSky는 매 사이클 base 경로가 담당하므로 여기서 제외한다.
+    """
+    out: list[str] = []
+    for s in sources:
+        if s == "opensky":
+            continue
+        iv = intervals.get(s)
+        if iv is None:
+            continue
+        if now - int(last_poll.get(s, 0)) >= iv:
+            out.append(s)
+    return out
+
+
+def _ingest_source(src: str, store) -> str:
+    """보조 소스 1회 ingest(기존 커넥터 함수 재사용) → 로깅용 요약 문자열.
+
+    실패는 호출측 루프에서 격리(try/except)한다 — 여기선 커넥터 예외를 그대로 전파.
+    StealthMole은 선택 소스라 지연 import(PyJWT·dotenv 의존을 기본 경로에서 배제).
+    """
+    if src == "gdelt":
+        n_news, n_men = gdelt.ingest(
+            store
+        )  # 실 GDELT URL의 NewsEvent(저신뢰) + mentions
+        return f"news={n_news} mentions={n_men}"
+    if src == "metar":
+        n = metar.ingest(store)  # WeatherState(라이브 실황)
+        return f"weather={n}"
+    if src == "celestrak":
+        # OrbitPass 재계산 + 미래 pass stale 정리(delete_future)는 커넥터 ingest 내부 로직 유지.
+        n_sat, n_pass, n_skip, n_del = celestrak.ingest(store)
+        return f"sat={n_sat} pass={n_pass} skip={n_skip} future_del={n_del}"
+    if src == "stealthmole":
+        from connectors import stealthmole  # 선택 소스 — 키 없으면 커넥터가 no-op
+
+        counts = stealthmole.ingest(store)
+        return f"sm={counts}"
+    return "unknown"
+
+
 def run_poller(
     interval: int = DEFAULT_POLL_INTERVAL,
     max_cycles: int = 0,
     db_path: str = DEFAULT_DB,
     stop_event: threading.Event | None = None,
+    sources=None,
 ) -> None:
-    """연속 폴러 루프(DR-0011). max_cycles=0 이면 무한(라이브 기본), 유한은 검증용.
+    """연속 다중소스 폴러 루프(DR-0011 실시간 · DR-0012 갭#3). max_cycles=0 이면 무한(라이브 기본).
 
-    간격은 MIN_POLL_INTERVAL(10초)로 하한을 둔다(크레딧 안전). 사이클마다 온톨로지 write +
-    이상탐지(ingest_cycle) 후 last_poll_ts를 사이드카에 기록한다(프론트 LIVE 표시). 대기는
+    소스별 due 스케줄링: 항적(OpenSky)은 매 사이클, 보조 소스(GDELT 5분·METAR 30분·Celestrak
+    12h·선택 StealthMole)는 각자 주기 도래 시에만 fetch한다. base 간격은 MIN_POLL_INTERVAL(10초)
+    하한(크레딧 안전). 각 소스 실패는 개별 격리 — 한 소스가 죽어도 루프는 지속·로깅만. 사이클마다
+    last_poll_ts + 소스별 last_poll을 사이드카에 기록(프론트 LIVE·소스별 신선도). 대기는
     stop_event로 인터럽트 가능 — SIGTERM/SIGINT 수신 시 현재 사이클을 마치고 정리 종료한다.
     스토어는 make_store()로 선택(SKAI_STORE=foundry면 HybridStore, 기본 로컬 — DR-0009).
+
+    sources=None(기본)이면 OpenSky-only(하위호환). 다중소스는 main()이 SKAI_POLL_SOURCES로 켠다.
     """
     stop_event = stop_event if stop_event is not None else _stop_event
+    sources = resolve_sources(sources)
     if interval < MIN_POLL_INTERVAL:
         print(
             f"[poller] interval {interval}s < 하한 {MIN_POLL_INTERVAL}s "
@@ -120,8 +217,11 @@ def run_poller(
 
     store = make_store(db_path)
     store.write_region(KADIZ_REGION)  # 관심지역 상수 등록
+    # 소스별 마지막 폴 시각(0=미폴 → 첫 사이클에 due) + 마지막 상태.
+    last_poll: dict[str, int] = {s: 0 for s in sources}
+    last_status: dict[str, str] = {s: "pending" for s in sources}
     print(
-        f"[poller] db={db_path} interval={interval}s "
+        f"[poller] db={db_path} interval={interval}s sources={sources} "
         f"max_cycles={'∞(연속)' if max_cycles == 0 else max_cycles} (SIGTERM으로 정리 종료)"
     )
     write_status(
@@ -130,6 +230,8 @@ def run_poller(
         interval=interval,
         max_cycles=max_cycles,
         cycle=0,
+        sources=sources,
+        source_last_poll=dict(last_poll),
         updated_at=int(time.time()),
     )
 
@@ -138,18 +240,35 @@ def run_poller(
         while not stop_event.is_set() and (max_cycles == 0 or cycle < max_cycles):
             cycle += 1
             poll_ts = int(time.time())
-            try:
-                n_obs, n_ac, n_anom = ingest_cycle(store, client, KADIZ_BBOX)
+            # ── 항적(OpenSky): 매 사이클 base 경로 ──
+            n_obs = n_ac = n_anom = 0
+            if "opensky" in sources:
+                try:
+                    n_obs, n_ac, n_anom = ingest_cycle(store, client, KADIZ_BBOX)
+                    status = "ok"
+                    last_poll["opensky"] = poll_ts
+                    last_status["opensky"] = "ok"
+                    print(
+                        f"[cycle {cycle}] obs 처리={n_obs} 항공기={n_ac} "
+                        f"신규Anomaly={n_anom} 누적={store.counts()}"
+                    )
+                except Exception as e:  # 사이클 실패는 로깅만, 다음 사이클 진행
+                    status = "error"
+                    last_status["opensky"] = "error"
+                    print(f"[cycle {cycle}] opensky 오류(격리): {e!r}")
+            else:
                 status = "ok"
-                print(
-                    f"[cycle {cycle}] obs 처리={n_obs} 항공기={n_ac} "
-                    f"신규Anomaly={n_anom} 누적={store.counts()}"
-                )
-            except Exception as e:  # 사이클 실패는 로깅만, 다음 사이클 진행
-                status = "error"
-                n_obs = n_ac = n_anom = 0
-                print(f"[cycle {cycle}] 오류: {e!r}")
-            # LIVE 상태 사이드카 갱신(프론트 인디케이터 — last_poll_ts·상태·카운트).
+            # ── 보조 소스(뉴스·기상·위성·선택 SM): 주기 도래분만, 실패는 개별 격리 ──
+            for src in due_sources(last_poll, poll_ts, SOURCE_INTERVALS, sources):
+                try:
+                    summary = _ingest_source(src, store)
+                    last_poll[src] = poll_ts
+                    last_status[src] = "ok"
+                    print(f"[cycle {cycle}] {src} 폴 완료: {summary}")
+                except Exception as e:  # 한 소스 실패가 루프·타 소스를 죽이지 않게 격리
+                    last_status[src] = "error"
+                    print(f"[cycle {cycle}] {src} 오류(격리, 루프 지속): {e!r}")
+            # LIVE 상태 사이드카 갱신(프론트 인디케이터 — last_poll_ts·상태·카운트·소스별 신선도).
             write_status(
                 db_path,
                 mode="live",
@@ -160,6 +279,9 @@ def run_poller(
                 cycle=cycle,
                 counts=store.counts(),
                 last_cycle={"obs": n_obs, "aircraft": n_ac, "new_anomalies": n_anom},
+                sources=sources,
+                source_last_poll=dict(last_poll),
+                source_last_status=dict(last_status),
                 updated_at=int(time.time()),
             )
             if max_cycles != 0 and cycle >= max_cycles:
@@ -177,6 +299,9 @@ def run_poller(
         max_cycles=max_cycles,
         cycle=cycle,
         counts=store.counts(),
+        sources=sources,
+        source_last_poll=dict(last_poll),
+        source_last_status=dict(last_status),
         updated_at=int(time.time()),
     )
     print(f"[poller] 종료(cycle={cycle}). 최종 카운트={store.counts()}")
@@ -198,10 +323,16 @@ def main() -> None:
     # MAX_CYCLES: 기본 0 = 무한(라이브). 검증 시 유한값 지정.
     max_cycles = int(os.environ.get("MAX_CYCLES", "0"))
     db_path = os.environ.get("SKAI_DB", DEFAULT_DB)
+    # 폴링 소스: SKAI_POLL_SOURCES(쉼표구분). 미설정 시 커맨드 레이어 기본 = 다중소스
+    # (항적+뉴스+기상+위성 — DR-0012 갭#3). OpenSky-only 회귀는 SKAI_POLL_SOURCES=opensky.
+    raw_sources = os.environ.get("SKAI_POLL_SOURCES", ",".join(DEFAULT_LIVE_SOURCES))
+    sources = [s for s in raw_sources.split(",") if s.strip()]
     # 명시 실행 프로세스만 신호로 정리 종료(자동 스케줄 없음 — 러너웨이 금지).
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
-    run_poller(interval=interval, max_cycles=max_cycles, db_path=db_path)
+    run_poller(
+        interval=interval, max_cycles=max_cycles, db_path=db_path, sources=sources
+    )
 
 
 if __name__ == "__main__":
