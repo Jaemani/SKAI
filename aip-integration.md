@@ -53,13 +53,14 @@ pip install <PKG> --upgrade --extra-index-url "https://:$FOUNDRY_TOKEN@<INDEX-UR
 # 저수준 대체(3.14 OK): pip install foundry-platform-sdk
 ```
 ```python
-# 문서 검증 기반 스니펫(2026-07-04) — 실행 검증은 토큰 확보 후 (docs/worklog/P0B-foundry.md)
+# ✅ 실행 검증 완료(2026-07-04, ROUNDTRIP-OK) — 상세·전체 스니펫: docs/worklog/P0B-foundry.md §8-4
+# 하이브리드: read = 생성 OSDK(skai_osdk_sdk), write = 저수준 foundry_sdk의 액션 apply
+# (발행 OSDK에 Action 미포함 시 client.ontology.actions가 비므로 저수준 우회 — 재발행 시 Action 포함 권장)
 import os
-from foundry_sdk import UserTokenAuth
-from my_osdk import FoundryClient          # 온톨로지별 생성물
-client = FoundryClient(
-    auth=UserTokenAuth(hostname=os.environ["FOUNDRY_HOSTNAME"], token=os.environ["FOUNDRY_TOKEN"]),
-    hostname=os.environ["FOUNDRY_HOSTNAME"])
+from skai_osdk_sdk import FoundryClient, UserTokenAuth   # 생성 OSDK (read)
+import foundry_sdk                                        # 저수준 (write=action)
+osdk = FoundryClient(auth=UserTokenAuth(os.environ["FOUNDRY_TOKEN"]), hostname=os.environ["FOUNDRY_HOSTNAME"])
+ac = osdk.ontology.objects.Aircraft.get("<icao24>")       # read-back 검증됨
 # 객체 read
 for ac in client.ontology.objects.Aircraft.where(...):
     ...

@@ -164,3 +164,83 @@
 3. **보강 — Python 버전 함정**: §0의 "OSDK Python(>=3.9,<3.13)"은 맞지만, **이 머신은 3.14.5**라 생성 OSDK 설치 불가. Python **3.12 별도 환경**이 P0 전제. 반면 저수준 `foundry_sdk`(1.97.0)는 3.14 지원 — 대체 경로 후보로 명시할 가치.
 4. **보강 — 저수준 SDK 최신 정보**: `foundry-platform-sdk` **최신 1.97.0**(2026-06-30), import 이름 **`foundry_sdk`**, `UserTokenAuth`/`ConfidentialClientAuth` 2종. §0의 "OSDK 2.x는 이 클라이언트와 통합" 진술과 일관.
 5. **보강 — 토큰 발급 경로 명문화**: Account → Settings → Tokens(1회 표시). §0에 없던 운영 디테일.
+
+---
+
+## 8. OSDK 왕복 (2026-07-04)
+
+### 판정: **ROUNDTRIP-OK** (write → OSDK read-back 일치 확인)
+
+사용자가 ④ OSDK 발행을 마쳐 생성 OSDK가 `.venv312`에 이미 설치된 상태에서 이어받음. read/write 왕복 완주.
+
+### 8-1. 설치된 패키지 (`.venv312`, Python 3.12.13)
+
+| 패키지 | 버전 | 역할 |
+|---|---|---|
+| **`skai_osdk_sdk`** | **0.1.0** | 사용자 발행 생성 OSDK. import 이름 `skai_osdk_sdk`, 콘솔 진입점 `foundry_sdk_v1/v2` |
+| `foundry-sdk-runtime` | 2.209.0 | OSDK 런타임(객체·편집·트랜잭션 기반) |
+| `foundry-platform-sdk` | 1.97.0 | 저수준 플랫폼 SDK(`import foundry_sdk`) — 액션/스키마 read 용 |
+
+- 재설치 형태(값은 .env·앱 Overview에서, **토큰/URL 문서 기재 금지**):
+  `.venv312/bin/pip install skai_osdk_sdk --extra-index-url "<발행물 simple 인덱스>"` — 딥은 공개 PyPI.
+- **인증**: `UserTokenAuth(token)` + bare `hostname`(스킴 없음). OSDK·저수준 SDK 동일.
+
+### 8-2. 온톨로지 실태 (mayh Ontology, rid …840ccb0f2a0c) — 라이브 read
+
+**Object Type: 총 12개** = 사용자 제작 **1개** + Palantir 예제 온톨로지 **11개**(마켓플레이스/튜토리얼 유래, prefix `Example*`: `ExampleFlight/Airport/Route/Carrier/Aircraft/…`). 전부 status=EXPERIMENTAL.
+
+- **사용자 제작 = `Aircraft` 하나뿐** (PK `icao24`). 속성 4개 전부 **string**: `icao24`, `is_military`(문자열 "false"/"true"), `callsign`, `registration`.
+- `ontology.md` §1 스펙(`icao24, callsign, registration, operator_ref, type, is_military`) 대비 **`operator_ref`·`type` 누락**, `is_military`는 boolean 아닌 **string**.
+- **Observation·Track·Anomaly·Region 등 나머지 객체와 모든 링크타입(observed_as 등)·CreateAnomaly 액션은 아직 미구축** (UI 작업 필요).
+
+**Action Type: 총 9개** = Aircraft용 3개(`create-aircraft`·`edit-aircraft`·`delete-aircraft`) + 예제 온톨로지 route-alert 계열 6개. 전부 EXPERIMENTAL.
+
+- **`create-aircraft` 파라미터 = `callsign`·`isMilitary`·`registration` (모두 required string). `icao24`(PK) 파라미터 없음** → 서버가 icao24를 **UUID로 자동 부여**(기존 인스턴스 PK가 전부 UUID인 이유).
+- `edit-aircraft`: 위 3개 + 대상 `Aircraft`(object) 파라미터. `delete-aircraft`: 대상 `Aircraft`만.
+
+**OSDK가 담은 것**: 발행 시 **Object Type `Aircraft`만 포함, Action은 0개**. → `client.ontology.objects.Aircraft`는 있으나 `client.ontology.actions`는 **비어 있음**. OSDK의 `edits` API(`edits.objects.Aircraft.create(icao24=…)`)는 **AIP Function 런타임 전용**(transaction_id를 런타임이 주입) — 클라이언트 단독 실행 불가(`OntologyTransaction`에 create/commit 없음, `post_edits`만 존재).
+
+### 8-3. 왕복 경로 = **write는 action, read는 OSDK** (하이브리드)
+
+OSDK에 액션이 없고 편집 API가 함수 전용이므로, **쓰기는 저수준 `foundry_sdk`의 `create-aircraft` 액션**으로 수행. 합법 API 정상 사용 범위.
+
+1. **READ (OSDK)**: `client.ontology.objects.Aircraft` 순회 → 사전 2건(callsign=TEST01, 이전 세션 잔여) 확인.
+2. **WRITE (foundry_sdk action)**: `pf.ontologies.Action.apply(ONT, "create-aircraft", parameters={callsign:"SKAITEST", isMilitary:"false", registration:"P0TEST0"}, options={"returnEdits":"ALL"})` → 새 Aircraft 1건 생성. returnEdits로 신규 PK 회수: **icao24=`176c3840-4d48-4496-9d43-03682249460d`**(UUID 자동).
+3. **READ-BACK (OSDK)**: `client.ontology.objects.Aircraft.get("176c3840-…")` → callsign=SKAITEST, registration=P0TEST0 **일치 확인**.
+
+- **icao24=`p0test0` 요구는 미충족**: create-aircraft가 PK 파라미터를 안 받아 UUID로 자동 부여됨. 테스트 객체는 **callsign=`SKAITEST` + registration=`P0TEST0`로 식별**(둘 다 유니크). 이건 우회 불가한 액션 설계 사실.
+- 스크립트 `scripts/p0b_roundtrip.py`는 **재실행 안전**: callsign=SKAITEST 존재 시 write 건너뜀(1건 상한 준수). 실제 쓰기는 1건만 발생, 현재 Aircraft 총 3건(TEST01×2 + SKAITEST×1).
+
+### 8-4. `store_foundry` 구현에 바로 쓸 정보
+
+```python
+# 클라이언트 초기화 (읽기=OSDK, 쓰기=저수준 액션)
+import os
+from dotenv import load_dotenv
+load_dotenv()  # FOUNDRY_TOKEN, FOUNDRY_HOSTNAME
+from skai_osdk_sdk import FoundryClient, UserTokenAuth
+import foundry_sdk
+
+TOKEN, HOST = os.environ["FOUNDRY_TOKEN"], os.environ["FOUNDRY_HOSTNAME"]
+osdk = FoundryClient(auth=UserTokenAuth(TOKEN), hostname=HOST)          # read
+pf   = foundry_sdk.FoundryClient(auth=foundry_sdk.UserTokenAuth(TOKEN), # write(action)
+                                 hostname=HOST)
+ONT = "ri.ontology.main.ontology.33d94264-3352-4354-aadf-840ccb0f2a0c"
+
+# READ:  osdk.ontology.objects.Aircraft.get(pk) / 순회 / .where(Aircraft.object_type.callsign == "…")
+# WRITE: pf.ontologies.Action.apply(ONT, "create-aircraft",
+#           parameters={"callsign":.., "isMilitary":"false", "registration":..},
+#           options={"returnEdits":"ALL"})   # resp.edits.edits[i].primary_key = 신규 icao24
+```
+
+- **타입 클래스명**: 객체 `from skai_osdk_sdk.ontology.objects import Aircraft`(속성 `icao24/is_military/callsign/registration`, 전부 Optional[str]). 액션 파라미터 wire 이름은 `isMilitary`(camelCase)에 주의.
+- **온톨로지 rid**: 위 `ONT`. OSDK엔 `client.ontology.rid`로 하드코딩 내장돼 있음.
+
+### 8-5. 다음 단계 (store_foundry / P1 진행 전 필요한 UI 선행작업)
+
+실 ISR 인제스트로 가려면 아래는 **사용자 브라우저 작업**(API 불가, §2-2):
+
+1. **create-aircraft에 icao24 파라미터 추가** — 실제 ADS-B hex(예 `a1b2c3`)를 PK로 넣으려면 액션이 icao24를 받아야 함. 지금은 UUID 자동이라 엔티티 해소(같은 기체=같은 icao24)가 깨짐. **P1 인제스트의 최우선 블로커.**
+2. **Aircraft 속성 보강**: `operator_ref`, `type` 추가 + `is_military`를 boolean으로(현재 string). ontology.md §1 정합.
+3. **나머지 스키마 구축**: Observation(증거 객체)·observed_as 링크·Anomaly·CreateAnomaly(evidence 필수) — provenance 백본. 최소 왕복은 Aircraft로 검증됐으므로, 다음은 Observation + observed_as로 그래프 1홉 검증.
+4. OSDK 재발행 시 **Action Type도 포함**해 발행하면 `client.ontology.actions.create_aircraft(...)` 네이티브 호출 가능(현재는 저수준 SDK 우회).
