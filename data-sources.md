@@ -34,6 +34,13 @@
 - ADS-B Exchange: **탈락** — 무료 API 폐지(2025-03, RapidAPI 유료 전환).
 - 한계(정직): 무료 2차 API는 현재 스냅샷만 — "지금 2차 소스가 보는가"의 근사 교차이지 window 전체 부재 단정 아님. 판정: 신선 관측=dropout 아님 / 미관측=부재 교차확인 / 오류·stale=미확인(단정 금지).
 
+#### 사용 확대 — 군용 식별 보강 (2026-07-05, DR-0013 결정 5)
+- **adsb.fi `/v2/mil` 채택** — 라이브 항적의 군용 여부를 **공개 커뮤니티 DB 플래그**로 저신뢰 보강(`SKAI_MIL_ENRICH=live` 게이트, 기본 off; 데모 live 모드는 기본 on). 크로스체크와 같은 소스·같은 리밋(1 req/s), 다른 질문("이 hex가 군용으로 DB 플래그돼 있나?").
+  - **실측(2026-07-05)**: `/v2/mil` HTTP 200, `ac` 94기, 각 entry에 `dbFlags` 필드, 전부 `dbFlags==1`. `/v2/hex/<hex>` 응답에도 동일 `dbFlags` 실림. `dbFlags` 의미는 readsb `README-json.md`: `military = dbFlags & 1`(bit0=military). → **bit0만** 군용 신호로 채택.
+  - **설계**: `/v2/mil`은 전 세계 군용 기체를 1회 호출로 전량 반환 → 60s TTL로 스냅샷 폴링, 군용 hex 집합을 캐시하고 bbox 항적을 O(1) 집합조회로 대조(호출량 최대 1 req/60s, hex 수 무관). 코드는 `connectors/mil_enrich_live.py`.
+  - **한계(정직)**: 커뮤니티 DB라 오탐·미탐 존재(실측 스냅샷에 민간 Piper `N342TA`가 dbFlags=1로 섞여 있었음 = 오탐). 그래서 confidence ≤0.65(저신뢰). 트랜스폰더 OFF 군용기는 여전히 안 보임 → dropout(부재) 경로 담당(이중 경로).
+  - **Attribution**: 데이터 제공 [adsb.fi](https://adsb.fi) — 인용 요건 준수(UI 크레딧 표기 필요).
+
 ## 2. 위성 궤도 (Satellite Orbits)
 
 ### Celestrak — 1순위

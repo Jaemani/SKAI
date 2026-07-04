@@ -23,6 +23,9 @@
 #                      기본 export(서술 다듬기 — cites·사실 불변, 실패 시 원문 폴백).
 #                      명시적으로 SKAI_COPILOT_LLM=template 등을 넘기면 그 값을 존중한다.
 #                      replay는 절대 건드리지 않음(template 고정 — 결정성·네트워크 0 전제).
+#   SKAI_CROSSCHECK    dropout 교차확인 게이트. live 계열은 미설정 시 이 스크립트가 "live"를
+#                      기본 export(2차 소스 adsb.fi로 실제 교차 판정 — DR-0013). 코드 기본은
+#                      off(Null). 명시 지정 시 그 값을 존중. replay는 절대 건드리지 않음.
 #
 # DB 레짐(3분리 — docs/worklog/db-regime.md SSOT):
 #   data/skai.db                  = 라이브 런타임(실데이터 전용). live 폴러가 씀. 합성 주입 금지
@@ -144,6 +147,20 @@ live() {
   # replay()는 여기서 export하지 않으므로 영향을 받지 않는다 — replay는 template 고정이
   # 결정성·네트워크 0 증명의 전제이므로 절대 건드리지 않는다.
   export SKAI_COPILOT_LLM="${SKAI_COPILOT_LLM:-claude}"
+
+  # 군용 식별 보강 게이트(DR-0013 결정 5) — live 계열은 SKAI_MIL_ENRICH 미설정 시 "live"로
+  # 켜서 라이브 항적의 군용 여부를 adsb.fi /v2/mil dbFlags로 저신뢰 보강한다(콜사인 휴리스틱
+  # 보다 한 단계 강한 근거). 호출량은 60s당 최대 1회(스냅샷 폴링)라 크레딧 영향 미미. 코드
+  # 기본은 off(Null)라 게이트 미설정 시 종전과 동일 — 데모 live에서만 기본 켠다. 이미 설정돼
+  # 있으면 사용자 지정 존중. replay()는 여기서 export하지 않으므로 template·네트워크0 불변.
+  export SKAI_MIL_ENRICH="${SKAI_MIL_ENRICH:-live}"
+
+  # dropout 교차확인 게이트(DR-0013) — live 계열은 SKAI_CROSSCHECK 미설정 시 "live"로 켜서
+  # ADS-B dropout을 2차 소스(adsb.fi)로 실제 교차 판정한다. 기본이 꺼진 채면 라이브 데모에서
+  # "교차확인 이중경로"가 실동작하지 않아 서사가 사실과 어긋난다. 코드 기본은 off(Null)라
+  # 게이트 미설정 시 종전과 동일 — 데모 live에서만 기본 켠다. 이미 설정돼 있으면 사용자
+  # 지정 존중. replay()는 여기서 export하지 않으므로 네트워크0 불변.
+  export SKAI_CROSSCHECK="${SKAI_CROSSCHECK:-live}"
 
   # 서버 — 벽시계 now(정직한 '지금', 앵커 없음), 오프라인 아님(라이브 fetch 필요).
   SKAI_DB="$live_db" SKAI_PORT="$PORT" \

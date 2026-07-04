@@ -84,7 +84,7 @@ def _anomaly_sentence_text(d: dict, confidence: float) -> str:
     """이상징후 유형별 서술(P5 5종). 근거·신뢰도·상태를 붙인다(무근거 서술 금지).
 
     비상 스쿽 외 유형(dropout·로이터링·군용기·위성 근접)은 attrs의 유형별 필드로
-    서술한다. dropout은 교차확인 여부, 군용기는 저신뢰 휴리스틱임을 문장에 명시한다.
+    서술한다. dropout은 교차확인 여부, 군용기는 저신뢰 판정임을 문장에 명시한다.
     """
     t = d.get("type")
     attrs = d.get("attrs") or {}
@@ -118,7 +118,7 @@ def _anomaly_sentence_text(d: dict, confidence: float) -> str:
     if t == "military_approach":
         return (
             f"{synth}군용 추정 항공기 {who}가 작전구역 {attrs.get('region')}에 접근"
-            f"(근거: {attrs.get('mil_reason')}, 저신뢰 휴리스틱) — 상태 {status}, {conf}."
+            f"(근거: {attrs.get('mil_reason')}, 저신뢰 판정) — 상태 {status}, {conf}."
         )
     if t == "satellite_proximity":
         sat = attrs.get("sat_name") or attrs.get("norad_id")
@@ -244,6 +244,7 @@ def _headline_sentence(
     """
     n_anom = len(reads.anomalies)
     n_flight = len(reads.flights)
+    n_synth = sum(1 for f in reads.anomalies if f.data.get("is_synthetic"))
     summary_cites: list[str] = []
     for f in reads.anomalies:
         summary_cites.extend(f.cites)
@@ -258,9 +259,11 @@ def _headline_sentence(
         if reads.anomalies
         else 0.85
     )
+    # 합성 라벨 전면 전파(DR-0013 #6) — 헤드라인 카운트에 합성 포함 여부를 사실대로 명시.
+    synth_note = f"(합성 {n_synth}건 포함)" if n_synth else ""
     return AssessmentSentence(
         text=(
-            f"{label} {region_name}에서 이상징후 {n_anom}건·항적 {n_flight}대를 "
+            f"{label} {region_name}에서 이상징후 {n_anom}건{synth_note}·항적 {n_flight}대를 "
             f"확인했습니다."
         ),
         cites=_dedup(summary_cites),
@@ -612,8 +615,27 @@ def _cited_objects(store, sentences: list[AssessmentSentence]) -> dict:
     return idx
 
 
+def _first_evidence_source_url(
+    store, anomaly_id: str, ac_map: dict, sat_map: dict
+) -> str:
+    """Anomaly의 첫 evidence 객체 source_url(원 소스 역추적). 없으면 "".
+
+    Anomaly는 파생 객체라 자체 source_url이 없다 — 화면의 "원 소스" 링크가 늘 공백이었다
+    (DR-0013 #9). evidenced_by 근거 중 첫 건(Observation 또는 P5 비-Observation 근거)의
+    source_url을 대신 낸다. 근거는 Anomaly가 아니므로 _resolve_object 재귀는 1단만 내려간다.
+    """
+    evidence = store.query_evidence(anomaly_id)
+    if not evidence:
+        return ""
+    obj = _resolve_object(store, evidence[0]["id"], ac_map, sat_map)
+    return (obj or {}).get("source_url") or ""
+
+
 def _resolve_object(store, cid: str, ac_map: dict, sat_map: dict) -> Optional[dict]:
-    """cite id → {type, label, lat, lon, source_url} (없으면 None)."""
+    """cite id → {type, label, lat, lon, source_url, ...} (없으면 None).
+
+    Anomaly는 추가로 is_synthetic(합성 라벨 전파, DR-0013 #6)을 포함한다.
+    """
     if cid.startswith("anomaly-"):
         a = store.get_anomaly(cid)
         if not a:
@@ -629,8 +651,9 @@ def _resolve_object(store, cid: str, ac_map: dict, sat_map: dict) -> Optional[di
             ),
             "lat": a.lat,
             "lon": a.lon,
-            "source_url": "",
+            "source_url": _first_evidence_source_url(store, cid, ac_map, sat_map),
             "status": a.status,
+            "is_synthetic": bool((a.attrs or {}).get("is_synthetic")),
         }
     if cid.startswith("pass-"):
         for p in store.query_orbitpasses():
@@ -1154,6 +1177,9 @@ def build_subgraph(store, assessment_id: str) -> Optional[dict]:
         return None
     ac_map = store.aircraft_map()
     sat_map = store.satellite_map()
+    # Aircraft 노드에 "지도에서 보기"를 붙이려면 좌표가 필요하다(엔티티 자체엔 좌표가 없음) —
+    # 항공기별 최신 관측 좌표로 보강(DR-0013 #9). 최신 관측이 없으면 None(지도 버튼 생략).
+    latest_obs_by_ac = {o.aircraft_ref: o for o in store.query_latest_observations()}
     nodes: dict[str, dict] = {
         a.id: {
             "id": a.id,
@@ -1187,14 +1213,15 @@ def build_subgraph(store, assessment_id: str) -> Optional[dict]:
         for icao in store.query_involves_ids(aid):
             nid = f"ac-{icao}"
             ac = ac_map.get(icao)
+            latest = latest_obs_by_ac.get(icao)
             nodes.setdefault(
                 nid,
                 {
                     "id": nid,
                     "type": "Aircraft",
                     "label": f"✈ {(ac.callsign if ac else None) or icao}",
-                    "lat": None,
-                    "lon": None,
+                    "lat": latest.lat if latest else None,
+                    "lon": latest.lon if latest else None,
                 },
             )
             edges.append({"src": aid, "dst": nid, "link_type": "involves"})

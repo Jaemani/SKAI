@@ -38,7 +38,8 @@ import httpx
 from anomaly.actions import scan_and_create_all
 from anomaly.crosscheck import CrossCheckSource
 from anomaly.explainer import get_explainer
-from connectors import celestrak, crosscheck_live, gdelt, metar, rss
+from anomaly.mil_enrich import MilEnrichmentSource
+from connectors import celestrak, crosscheck_live, gdelt, metar, mil_enrich_live, rss
 from ontology import mapping
 from ontology.custody import rebuild_tracks
 from ontology.model import KADIZ_BBOX, KADIZ_REGION
@@ -97,6 +98,7 @@ def ingest_cycle(
     client: httpx.Client,
     bbox: dict,
     crosscheck: CrossCheckSource | None = None,
+    mil_enrich: MilEnrichmentSource | None = None,
 ) -> tuple[int, int, int]:
     """1 폴링 사이클: fetch → write(Aircraft/Observation/observed_as) → Track 재구성
     → 이상탐지(P5 전 유형 룰 → CreateAnomaly + 상관 영속).
@@ -104,6 +106,8 @@ def ingest_cycle(
     이상탐지는 scan_and_create_all(비상 스쿽 + dropout + 로이터링 + 군용기 + 위성 근접)로
     전 유형을 스캔한다. dropout은 crosscheck(2차 소스)로 교차 판정 — 기본 Null(미확인·저신뢰),
     SKAI_CROSSCHECK=live 게이트 시 라이브 2차 소스(adsb.fi)로 상향 판정(crosscheck_live).
+    군용기 접근은 mil_enrich(공개 DB 플래그)로 라이브 식별을 저신뢰 보강 — 기본 Null(휴리스틱만),
+    SKAI_MIL_ENRICH=live 게이트 시 adsb.fi /v2/mil dbFlags로 보강(mil_enrich_live).
 
     반환: (이번 사이클 처리 관측 수, 등장 항공기 수, 신규 Anomaly 수).
     """
@@ -130,7 +134,7 @@ def ingest_cycle(
     # dedup으로 같은 이상은 중복 생성 안 됨. 백엔드는 SKAI_EXPLAINER로 선택(기본 template).
     # crosscheck는 dropout 교차 판정용(기본 Null → 저신뢰; SKAI_CROSSCHECK=live 시 라이브 2차 소스).
     created = scan_and_create_all(
-        store, crosscheck=crosscheck, explainer=get_explainer()
+        store, crosscheck=crosscheck, explainer=get_explainer(), mil_enrich=mil_enrich
     )
     n_anom = sum(len(v) for v in created.values())
     return n_obs, len(icaos), n_anom
@@ -238,6 +242,9 @@ def run_poller(
     # dropout 교차 판정 소스 — 사이클 간 1개 인스턴스 재사용(캐시·레이트리밋 상태 보존).
     # 기본 Null(미확인·저신뢰), SKAI_CROSSCHECK=live 게이트 시 라이브 2차 소스(adsb.fi).
     crosscheck = crosscheck_live.make_crosscheck()
+    # 군용 식별 보강 소스 — 사이클 간 1개 인스턴스 재사용(/v2/mil 스냅샷 캐시·60s 리밋 보존).
+    # 기본 Null(휴리스틱만), SKAI_MIL_ENRICH=live 게이트 시 adsb.fi /v2/mil dbFlags 보강.
+    mil_enrich = mil_enrich_live.make_mil_enrichment()
     # 소스별 마지막 폴 시각(0=미폴 → 첫 사이클에 due) + 마지막 상태.
     last_poll: dict[str, int] = {s: 0 for s in sources}
     last_status: dict[str, str] = {s: "pending" for s in sources}
@@ -266,7 +273,11 @@ def run_poller(
             if "opensky" in sources:
                 try:
                     n_obs, n_ac, n_anom = ingest_cycle(
-                        store, client, KADIZ_BBOX, crosscheck=crosscheck
+                        store,
+                        client,
+                        KADIZ_BBOX,
+                        crosscheck=crosscheck,
+                        mil_enrich=mil_enrich,
                     )
                     status = "ok"
                     last_poll["opensky"] = poll_ts

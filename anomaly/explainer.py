@@ -252,11 +252,20 @@ def explain_draft(draft) -> str:
         )
 
     if draft.type == ANOMALY_TYPE_MILITARY_APPROACH:
+        # 판정 신호(mil_source)에 맞춰 근거 라벨·caveat를 서술 — 출처가 문장까지 전파된다.
+        if s.get("mil_source") == "db_flag":
+            qualifier = "저신뢰 공개 DB 플래그"
+            caveat = (
+                "군용 판정은 공개 커뮤니티 ADS-B DB(adsb.fi) 플래그 기반 — 커뮤니티 DB라 "
+                "오탐·미탐 가능, 교차검증 요망."
+            )
+        else:
+            qualifier = "저신뢰 휴리스틱"
+            caveat = "군용 판정은 콜사인·대역 기반으로 오탐 가능 — 교차검증 요망."
         return (
             f"{prefix}군용 추정 항공기 {callsign}(icao24 {icao24})가 작전구역 "
             f"{s.get('region')}에 진입했습니다. 근거: {s.get('mil_reason')}"
-            f"(저신뢰 휴리스틱, 신뢰도 {c:.2f}). 군용 판정은 콜사인·대역 기반으로 오탐 "
-            f"가능 — 교차검증 요망."
+            f"({qualifier}, 신뢰도 {c:.2f}). {caveat}"
         )
 
     if draft.type == ANOMALY_TYPE_SATELLITE_PROXIMITY:

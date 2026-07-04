@@ -15,6 +15,7 @@ from typing import Any, Optional
 
 from anomaly.crosscheck import CrossCheckSource, NullCrossCheckSource
 from anomaly.isr_satellites import is_signal_promotable_pass
+from anomaly.mil_enrich import MilEnrichmentSource, NullMilEnrichment
 from anomaly.military_db import classify_military
 from ontology.geo import haversine_km, path_length_km, region_of_point
 from ontology.model import (
@@ -112,6 +113,9 @@ LOITERING_MAX_RATIO = 0.35  # 변위/경로길이 ≤ 이 값 = 선회·반복
 LOITERING_CONFIDENCE = 0.6  # 행태 휴리스틱(중간 신뢰도)
 # 군용기 접근: 명시 is_military 플래그(합성)엔 이 값, 사전 휴리스틱엔 military_db 신뢰도.
 MILITARY_EXPLICIT_CONFIDENCE = 0.55
+# 공개 커뮤니티 DB 플래그(adsb.fi dbFlags&1)는 콜사인·대역 휴리스틱보다 근거가 한 단계 강하나
+# 여전히 커뮤니티 DB(오탐·미탐 존재) → 저신뢰 상한(≤0.65)에 둔다(DR-0013 결정 5).
+MILITARY_DB_FLAG_CONFIDENCE = 0.65
 # 위성 근접: over 민감구역 AND now±창 AND 최대앙각 임계(near-overhead=실제 근접).
 SAT_PROXIMITY_WINDOW = 60 * 60  # now ± 이 창의 통과만
 SAT_PROXIMITY_MIN_ELEV = 70.0  # 최대앙각 임계(천정 근접만 → 노이즈 차단)
@@ -280,25 +284,51 @@ def detect_military_approach(
     aircraft_map: dict,
     oparea_regions: list,
     now: int,
+    mil_enrich: Optional[MilEnrichmentSource] = None,
 ) -> list[AnomalyDraft]:
     """군용기 접근 후보. is_military(저신뢰 판정) AND Observation within OpArea Region.
 
-    is_military는 관측 소스 플래그(합성 명시) 또는 military_db 휴리스틱(콜사인·대역)으로
-    **저신뢰** 판정한다(단정 금지 — 대역은 국가 할당). 근거=Observation, 주체=Aircraft.
+    is_military는 세 신호로 **저신뢰** 판정한다(단정 금지 — 대역은 국가 할당, DB는 커뮤니티).
+    우선순위(강→약):
+      1. **공개 커뮤니티 DB 플래그**(mil_enrich, adsb.fi dbFlags&1) — 라이브 최강 신호(0.65).
+      2. **콜사인·대역 휴리스틱**(military_db) — 0.5~0.65.
+      3. **관측 소스 명시 is_military 플래그**(합성 주입 등) — 0.55(불변 경로).
+    근거=Observation, 주체=Aircraft. signal.mil_source가 어느 신호인지 명시해 explainer가
+    출처에 맞는 caveat를 서술한다(provenance 문장 전파). 기본 mil_enrich=Null(보강 없음).
     """
+    mil_enrich = mil_enrich or NullMilEnrichment()
     out: list[AnomalyDraft] = []
     for o in latest_observations:
         ac = aircraft_map.get(o.aircraft_ref)
         callsign = ac.callsign if ac else None
-        # 휴리스틱 우선 판정(콜사인·대역). 걸리면 그 신뢰도·근거를 쓴다.
-        is_mil, mil_conf, reason = classify_military(o.aircraft_ref, callsign)
-        if not is_mil and ac is not None and ac.is_military:
-            # 관측 소스가 명시적으로 is_military → 저신뢰 정황(합성 주입 등).
-            is_mil, mil_conf, reason = (
+        # 1) 공개 DB 플래그(라이브 보강) — 콜사인·대역 휴리스틱보다 상위. 게이트 off면 항상 None.
+        db_hit = mil_enrich.lookup(o.aircraft_ref)
+        # 2) 콜사인·대역 휴리스틱.
+        cs_mil, cs_conf, cs_reason = classify_military(o.aircraft_ref, callsign)
+        if db_hit is not None:
+            is_mil, mil_conf, reason, mil_source = (
+                True,
+                MILITARY_DB_FLAG_CONFIDENCE,
+                db_hit[1],
+                "db_flag",
+            )
+        elif cs_mil:
+            is_mil, mil_conf, reason, mil_source = (
+                True,
+                cs_conf,
+                cs_reason,
+                "heuristic",
+            )
+        elif ac is not None and ac.is_military:
+            # 3) 관측 소스가 명시적으로 is_military → 저신뢰 정황(합성 주입 등). 불변.
+            is_mil, mil_conf, reason, mil_source = (
                 True,
                 MILITARY_EXPLICIT_CONFIDENCE,
-                ("관측 소스 is_military 플래그"),
+                "관측 소스 is_military 플래그",
+                "explicit",
             )
+        else:
+            continue
         if not is_mil:
             continue
         region = region_of_point(oparea_regions, o.lat, o.lon)
@@ -317,6 +347,7 @@ def detect_military_approach(
                 signal={
                     "callsign": callsign,
                     "mil_reason": reason,
+                    "mil_source": mil_source,  # db_flag | heuristic | explicit
                     "region": region.name,
                     "is_synthetic": o.source == "synthetic",
                 },

@@ -16,6 +16,7 @@ from typing import Optional
 from anomaly import correlation
 from anomaly.crosscheck import CrossCheckSource, NullCrossCheckSource
 from anomaly.explainer import ExplainerBackend, TemplateExplainer, explain_draft
+from anomaly.mil_enrich import MilEnrichmentSource, NullMilEnrichment
 from anomaly.rules import (
     AnomalyCandidate,
     AnomalyDraft,
@@ -213,15 +214,18 @@ def scan_and_create_all(
     crosscheck: Optional[CrossCheckSource] = None,
     explainer: Optional[ExplainerBackend] = None,
     do_correlate: bool = True,
+    mil_enrich: Optional[MilEnrichmentSource] = None,
 ) -> dict[str, list[Anomaly]]:
     """전 유형 스캔(비상 스쿽 + dropout + 로이터링 + 군용기 + 위성 근접) → CreateAnomaly.
 
     탐지 직후 correlation.correlate_all로 correlated_with 링크까지 영속한다(is_correlate).
+    군용기 접근은 mil_enrich(공개 DB 플래그, 기본 Null)로 라이브 식별을 저신뢰 보강한다.
     반환: {유형: [이번에 신규 생성된 Anomaly, ...]} (dedup으로 기존은 제외).
     """
     now = int(now if now is not None else time.time())
     crosscheck = crosscheck or NullCrossCheckSource()
     explainer = explainer or TemplateExplainer()
+    mil_enrich = mil_enrich or NullMilEnrichment()
 
     regions = store.query_regions()
     sensitive = [r for r in regions if r.classification in SENSITIVE_CLASSIFICATIONS]
@@ -251,7 +255,7 @@ def scan_and_create_all(
     drafts: list[AnomalyDraft] = []
     drafts += detect_adsb_dropout(tracks, latest_by_ac, sensitive, now, crosscheck)
     drafts += detect_loitering(tracks, latest_by_ac, now)
-    drafts += detect_military_approach(latest, aircraft_map, opareas, now)
+    drafts += detect_military_approach(latest, aircraft_map, opareas, now, mil_enrich)
     drafts += detect_satellite_proximity(orbitpasses, region_map, now, satellite_map)
     drafts += detect_rapid_maneuver(tracks, observations_by_ac, now)
     for draft in drafts:

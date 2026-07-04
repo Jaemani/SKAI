@@ -199,11 +199,15 @@
     #right-rail .sec-body { padding: 4px 13px 12px; }
     #sec-src .sec-hd { color: var(--blue); }
     #src-rows .row { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; margin: 5px 0; }
-    #src-rows .row .k { color: var(--muted); }
+    #src-rows .row .k { color: var(--muted); cursor: help; border-bottom: 1px dotted var(--muted-2); }
+    #src-rows .row .fresh { color: var(--muted-2); font-size: 9.5px; margin-left: 5px; }
     #src-rows .st { color: var(--muted-2); font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px;
       margin: 9px 0 3px; }
     #stamp { color: var(--muted-2); font-size: 10.5px; margin-top: 9px; border-top: 1px solid var(--line-soft);
       padding-top: 7px; }
+    #credit { color: var(--muted-2); font-size: 9.5px; margin-top: 5px; line-height: 1.4; }
+    #credit a { color: var(--muted-2); text-decoration: underline; }
+    #credit a:hover { color: #cfe0f0; }
     #sec-wx .sec-hd { color: #6fd0ff; }
     #weather-body .row { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; margin: 3px 0; }
     #weather-body .row .k { color: var(--muted); }
@@ -263,6 +267,7 @@
     .cite-chip.t-WeatherState { border-color: #23506e; color: #8fc9ff; }
     .cite-chip.t-NewsEvent { border-color: #4a3a6a; color: #cdb6ff; }
     .cite-chip.plain::before { content: ""; }
+    .cite-chip.synth { border-style: dashed; }
 
     /* 문장 카드 */
     .a-sent { border-left: 3px solid #35506e; padding: 6px 0 6px 10px; margin: 7px 0;
@@ -395,6 +400,8 @@
     #sg-box .hdr h1 { font-size: 14px; margin: 0; color: var(--blue); }
     #sg-box .hdr .x { cursor: pointer; color: var(--muted); font-size: 18px; padding: 0 6px; }
     #sg-box .hdr .x:hover { color: #fff; }
+    #sg-intro { padding: 7px 14px; font-size: 11px; color: #9fb8d0; line-height: 1.5;
+      background: rgba(18,40,63,0.4); border-bottom: 1px solid var(--line-soft); }
     #sg-wrap { flex: 1; display: flex; min-height: 0; }
     #sg-svg { flex: 1; height: 100%; background: radial-gradient(circle at 50% 45%, #0e1c2c 0%, #0a131e 70%); }
     #sg-detail { width: 240px; border-left: 1px solid var(--line); padding: 12px; font-size: 12px;
@@ -413,6 +420,7 @@
     .sg-elabel { fill: #6f88a3; font-size: 8.5px; pointer-events: none; }
     .sg-node circle { cursor: pointer; stroke: #0b1622; stroke-width: 1.5; }
     .sg-node.sel circle { stroke: #fff; stroke-width: 2.5; }
+    .sg-node.synth circle { stroke: #c3a9ff; stroke-width: 2; stroke-dasharray: 3 2; }
     .sg-nlabel { fill: #cfe0f0; font-size: 9.5px; pointer-events: none; }
 
     /* 좁은 화면 대응 (발표 외 축소 시) */
@@ -466,6 +474,7 @@
             <div class="lrow"><span class="ln l-gap"></span>ADS-B gap 트랙</div>
             <div class="lrow"><span class="ln l-sat"></span>위성 지상궤적</div>
             <div class="lrow"><span class="dotm l-anom"></span>이상징후</div>
+            <div class="lrow"><span class="dotm l-anom" style="border-style:dashed;border-width:2px;border-color:#c3a9ff"></span>이상징후(합성 시나리오)</div>
             <div class="lrow"><span class="l-op dotm"></span>작전구역(OpArea)</div>
             <div class="types" id="type-legend"></div>
             <div class="togrow">
@@ -494,12 +503,17 @@
               <div class="row"><span class="k">ADS-B gap 트랙</span><span id="n-gap">0</span></div>
               <div class="row"><span class="k">이상징후</span><span id="n-anom">0</span></div>
               <div class="st">소스별 객체</div>
-              <div class="row"><span class="k">OpenSky 항적</span><span id="c-opensky">0</span></div>
-              <div class="row"><span class="k">Celestrak 통과</span><span id="c-celestrak">0</span></div>
-              <div class="row"><span class="k">METAR 기상</span><span id="c-metar">0</span></div>
-              <div class="row"><span class="k">GDELT 뉴스</span><span id="c-gdelt">0</span></div>
+              <div class="row"><span class="k" title="실시간 ADS-B 항적(커뮤니티 수신망)">OpenSky 항적</span>
+                <span><span id="c-opensky">0</span><span class="fresh" id="f-opensky"></span></span></div>
+              <div class="row"><span class="k" title="위성 궤도요소(TLE)→통과 계산">Celestrak 통과</span>
+                <span><span id="c-celestrak">0</span><span class="fresh" id="f-celestrak"></span></span></div>
+              <div class="row"><span class="k" title="공항 항공기상 실황">METAR 기상</span>
+                <span><span id="c-metar">0</span><span class="fresh" id="f-metar"></span></span></div>
+              <div class="row"><span class="k" title="글로벌 뉴스 인덱스(저신뢰 OSINT)">GDELT 뉴스</span>
+                <span><span id="c-gdelt">0</span><span class="fresh" id="f-gdelt"></span></span></div>
             </div>
             <div id="stamp">갱신 대기…</div>
+            <div id="credit">교차확인·군용 식별 데이터 제공: <a href="https://adsb.fi" target="_blank" rel="noopener">adsb.fi</a></div>
           </div>
         </div>
         <div class="sec" id="sec-wx">
@@ -578,6 +592,7 @@
         <h1>🕸 온톨로지 서브그래프 · <span id="sg-title">—</span></h1>
         <span class="x" onclick="closeSubgraph()">✕</span>
       </div>
+      <div id="sg-intro">중심 = 이번 상황평가(질의가 만든 인텔 객체) · 바깥으로 갈수록 원 근거 — 모든 주장이 관측/출처까지 역추적됩니다.</div>
       <div id="sg-wrap">
         <svg id="sg-svg"></svg>
         <div id="sg-detail"><span class="k">노드를 클릭하면 상세가 표시됩니다.</span></div>
@@ -927,12 +942,16 @@
         const color = TYPE_COLOR[a.type] || STATUS_COLOR[a.status] || "#ff3b3b";
         const sel = a.id === selectedId;
         const nCorr = (a.correlations || []).length;
+        // 합성 시나리오는 점선 테두리로 실데이터와 구분(DR-0013 #6 — "찾는 척" 인상 방지).
+        const synth = !!(a.attrs && a.attrs.is_synthetic);
         const m = L.circleMarker([a.lat, a.lon], {
           radius: sel ? 15 : 11,
           color: sel ? "#ffffff" : (a.status === "dismissed" ? "#6b7a8d" : "#ffffff"),
           weight: sel ? 3 : 2, fillColor: color,
           fillOpacity: a.status === "dismissed" ? 0.3 : 0.72,
+          dashArray: synth ? "4 3" : null,
         }).bindTooltip("<b>" + (TYPE_ICON[a.type] || "⚠") + " " + (TYPE_LABEL[a.type] || a.type) + "</b>" +
+          (synth ? " <span style='color:#c3a9ff'>[합성]</span>" : "") +
           "<br>" + esc(a.attrs && a.attrs.callsign ? a.attrs.callsign : "") +
           (a.attrs && a.attrs.squawk ? " · sq " + esc(a.attrs.squawk) : "") +
           "<br>신뢰도 " + a.confidence.toFixed(2) + " · " + (STATUS_LABEL[a.status] || a.status) +
@@ -962,7 +981,7 @@
         div.innerHTML =
           '<div class="a-title">' + (TYPE_ICON[a.type] || "⚠") + " " + (TYPE_LABEL[a.type] || a.type) +
           (a.attrs && a.attrs.squawk ? " " + esc(a.attrs.squawk) : "") + synth +
-          (nCorr ? ' <span class="badge b-corr">🔗' + nCorr + "</span>" : "") + "</div>" +
+          (nCorr ? ' <span class="badge b-corr" title="교차소스 상관 ' + nCorr + '건 — 클릭해 상세">🔗' + nCorr + "</span>" : "") + "</div>" +
           '<div class="a-meta"><span>' + esc(a.attrs && a.attrs.callsign ? a.attrs.callsign :
             (a.attrs && a.attrs.sat_name ? a.attrs.sat_name : a.type)) + " · " + fmtTime(a.ts) + "</span></div>" +
           '<div class="a-meta"><span class="badge b-conf">신뢰도 ' + a.confidence.toFixed(2) + "</span>" +
@@ -970,6 +989,32 @@
         div.onclick = () => selectAnomaly(a.id);
         list.appendChild(div);
       }
+    }
+
+    // 상관 사유(correlations[].reason, DR-0013 #4) → 사람이 읽는 문장. 구링크(reason 없음)는 null
+    // 반환(호출자가 type/label만 표시하는 기존 동작으로 폴백).
+    function corrReasonText(c) {
+      const r = c.reason;
+      if (!r) return null;
+      if (r.kind === "anomaly_orbitpass") {
+        const mins = Math.round(Math.abs(r.dt_s || 0) / 60);
+        const elev = r.max_elevation != null ? r.max_elevation.toFixed(0) + "°" : "—";
+        return "위성 통과와 ±" + mins + "분, 같은 구역(" + esc(r.region || "—") + ") 상공(최대앙각 " + elev + ")";
+      }
+      if (r.kind === "anomaly_news") {
+        const mins = Math.round(Math.abs(r.dt_s || 0) / 60);
+        return "뉴스와 ±" + mins + "분, 공유 지역 " + esc((r.shared_regions || []).join(", ") || "—");
+      }
+      if (r.kind === "anomaly_anomaly") {
+        const mins = Math.round((r.gap_s || 0) / 60);
+        return "이상징후와 시간차 " + mins + "분 · 거리 " + (r.distance_km != null ? r.distance_km : "—") + " km";
+      }
+      return null;
+    }
+    function corrItemHtml(c) {
+      const reasonTxt = corrReasonText(c);
+      return '<div class="corr"><span class="ct">' + esc(c.type) + "</span> · " + esc(c.label) +
+        (reasonTxt ? "<br><span style='color:#9fc9c9'>" + reasonTxt + "</span>" : "") + "</div>";
     }
 
     function renderDetail() {
@@ -990,8 +1035,15 @@
           (e.source_url ? '<a href="' + esc(e.source_url) + '" target="_blank" rel="noopener">' + esc(e.source_url) + "</a>" : "") + "</div>";
       }
       let corr = "";
-      for (const c of (a.correlations || [])) {
-        corr += '<div class="corr"><span class="ct">' + esc(c.type) + "</span> · " + esc(c.label) + "</div>";
+      const corrList = a.correlations || [];
+      const corrTop = corrList.slice(0, 3);
+      const corrRest = corrList.slice(3);
+      for (const c of corrTop) corr += corrItemHtml(c);
+      if (corrRest.length) {
+        corr += '<details class="cluster"><summary>🔗 상관 ' + corrRest.length +
+          '건 더보기<span class="cx"></span></summary><div class="cbdy">';
+        for (const c of corrRest) corr += corrItemHtml(c);
+        corr += "</div></details>";
       }
       const done = a.status !== "candidate";
       const nEv = (a.evidence || []).filter((e) => e.lat != null && e.lon != null).length;
@@ -1058,7 +1110,7 @@
     // ════════════════════════════════════════════════════════════
     // 데이터 갱신 + LIVE 상태
     // ════════════════════════════════════════════════════════════
-    let liveState = { last_poll_ts: null, live: false, mode: null, interval: null, recvAt: 0, server_now: 0 };
+    let liveState = { last_poll_ts: null, live: false, mode: null, interval: null, recvAt: 0, server_now: 0, source_last_poll: null };
     let refreshMs = 30000;
     let refreshTimer = null;
     let pendingAnomSelect = new URLSearchParams(location.search).get("anom");
@@ -1081,15 +1133,36 @@
       else { el.classList.add("stale"); lab.textContent = liveState.mode === "stopped" ? "폴링 정지" : "지연"; }
       ago.textContent = "· " + elapsed + "초 전 갱신";
     }
+    // 소스별 신선도(DR-0013 #9) — /api/live의 source_last_poll(opensky/celestrak/metar/gdelt)을
+    // "N초/분/시간 전"으로 표시. replay(폴러 없음)에서는 표시하지 않는다(고정 스냅샷에 "방금"은 오도).
+    const SRC_FRESH_EL = { opensky: "f-opensky", celestrak: "f-celestrak", metar: "f-metar", gdelt: "f-gdelt" };
+    function fmtAgo(sec) {
+      if (sec < 60) return sec + "초 전";
+      if (sec < 3600) return Math.round(sec / 60) + "분 전";
+      return Math.round(sec / 3600) + "시간 전";
+    }
+    function drawSourceFreshness() {
+      const replay = liveState.last_poll_ts == null;
+      for (const [key, elId] of Object.entries(SRC_FRESH_EL)) {
+        const el = document.getElementById(elId);
+        if (!el) continue;
+        const ts = !replay && liveState.source_last_poll ? liveState.source_last_poll[key] : null;
+        if (ts == null) { el.textContent = ""; continue; }
+        const sec = Math.max(0, Math.round((liveState.server_now + (Date.now() - liveState.recvAt) / 1000) - ts));
+        el.textContent = fmtAgo(sec);
+      }
+    }
     // 1초 틱 — "N초 전"만 갱신(가벼움)
-    setInterval(() => { if (liveState.last_poll_ts != null) renderLiveBadge(); }, 1000);
+    setInterval(() => { if (liveState.last_poll_ts != null) { renderLiveBadge(); drawSourceFreshness(); } }, 1000);
 
     async function pollLive() {
       try {
         const lv = await getJSON("/api/live");
         liveState = { last_poll_ts: lv.last_poll_ts, live: !!lv.live, mode: lv.mode || null,
-          interval: lv.interval || null, server_now: lv.server_now || Math.floor(Date.now() / 1000), recvAt: Date.now() };
+          interval: lv.interval || null, server_now: lv.server_now || Math.floor(Date.now() / 1000), recvAt: Date.now(),
+          source_last_poll: lv.source_last_poll || null };
         renderLiveBadge();
+        drawSourceFreshness();
         // 폴링 주기에 맞춰 자동 갱신 간격 조정(하한 10s)
         const want = liveState.interval ? Math.max(10, liveState.interval) * 1000 : 30000;
         if (want !== refreshMs) { refreshMs = want; scheduleRefresh(); }
@@ -1217,8 +1290,11 @@
       const obj = (lastAssessment && lastAssessment.cited_objects && lastAssessment.cited_objects[id]) || null;
       const type = obj ? obj.type : "";
       const label = obj ? obj.label : id;
-      return '<span class="cite-chip ' + (plain ? "plain " : "") + "t-" + esc(type) + '" title="' + esc(id) +
-        '" onclick="highlightCite(\'' + esc(id).replace(/'/g, "\\'") + "')\">" + esc(label) + "</span>";
+      const synth = obj && obj.is_synthetic;
+      const title = esc(id) + (synth ? " · 합성 시나리오 데이터(실측 아님)" : "");
+      return '<span class="cite-chip ' + (plain ? "plain " : "") + "t-" + esc(type) + (synth ? " synth" : "") +
+        '" title="' + title + '" onclick="highlightCite(\'' + esc(id).replace(/'/g, "\\'") + "')\">" +
+        (synth ? "[합성] " : "") + esc(label) + "</span>";
     }
     function citesRow(cites) { return cites.map((c) => citeChip(c)).join(" "); }
 
@@ -1396,22 +1472,28 @@
     }
 
     // ── cite 하이라이트 (지도 펄스 + 원 소스) ──
-    function highlightCite(id) {
-      const obj = (lastAssessment && lastAssessment.cited_objects && lastAssessment.cited_objects[id]) || null;
+    // obj = {lat, lon, label, type, status?, source_url?, is_synthetic?} — cited_objects 항목뿐
+    // 아니라 서브그래프 노드(Aircraft 등, cited_objects에 없음)도 그대로 받는다(sgFocusNode 재사용).
+    function focusMapPoint(obj) {
       if (!obj) return;
       citeLayer.clearLayers();
       if (obj.lat != null && obj.lon != null) {
         map.setView([obj.lat, obj.lon], Math.max(map.getZoom(), 7), { animate: true });
         L.circleMarker([obj.lat, obj.lon], { className: "cite-ring", radius: 11, weight: 2 }).addTo(citeLayer);
-        let html = "<b>" + esc(obj.label) + "</b><br><span style='color:#8aa'>" + esc(obj.type) +
+        const synthTag = obj.is_synthetic ? "[합성] " : "";
+        let html = "<b>" + synthTag + esc(obj.label) + "</b><br><span style='color:#8aa'>" + esc(obj.type) +
           (obj.status ? " · " + esc(obj.status) : "") + "</span>";
         if (obj.source_url) html += "<br><a href='" + esc(obj.source_url) + "' target='_blank' rel='noopener'>원 소스 →</a>";
         L.circleMarker([obj.lat, obj.lon], { radius: 7, color: "#ffffff", weight: 2,
           fillColor: "#7ce0a8", fillOpacity: 0.85 }).addTo(citeLayer).bindPopup(html).openPopup();
-        showFlowbar("근거: " + obj.label);
+        showFlowbar("근거: " + synthTag + obj.label);
       } else if (obj.source_url) {
         window.open(obj.source_url, "_blank", "noopener");
       }
+    }
+    function highlightCite(id) {
+      const obj = (lastAssessment && lastAssessment.cited_objects && lastAssessment.cited_objects[id]) || null;
+      focusMapPoint(obj);
     }
     window.highlightCite = highlightCite;
 
@@ -1426,7 +1508,8 @@
         if (obj && obj.lat != null && obj.lon != null) {
           L.circleMarker([obj.lat, obj.lon], { className: "cite-ring", radius: 11, weight: 2 }).addTo(citeLayer);
           L.circleMarker([obj.lat, obj.lon], { radius: 6, color: "#fff", weight: 1.5,
-            fillColor: "#7ce0a8", fillOpacity: 0.85 }).bindTooltip(esc(obj.label)).addTo(citeLayer);
+            fillColor: "#7ce0a8", fillOpacity: 0.85 })
+            .bindTooltip(esc((obj.is_synthetic ? "[합성] " : "") + obj.label)).addTo(citeLayer);
           pts.push([obj.lat, obj.lon]);
         }
       }
@@ -1445,6 +1528,15 @@
       OrbitPass: "#38d9d9", WeatherState: "#6fb4ff", NewsEvent: "#b79bff", Aircraft: "#ffb454" };
     const NODE_R = { SituationAssessment: 16, Anomaly: 11, Observation: 6, OrbitPass: 8,
       WeatherState: 8, NewsEvent: 8, Aircraft: 7 };
+    // 엣지 라벨 한국어 병기(DR-0013 #9) — 원어는 SVG <title>(hover 툴팁)로 보존.
+    const EDGE_LABEL_KO = { aggregates: "포함", cites: "인용", evidenced_by: "근거",
+      involves: "관련 기체", correlated_with: "교차 상관" };
+    let sgNodesById = {};   // id → 노드(지도 이동 버튼이 cited_objects 없이도 좌표를 찾게)
+    function sgFocusNode(id) {
+      const n = sgNodesById[id];
+      if (n) focusMapPoint(n);
+    }
+    window.sgFocusNode = sgFocusNode;
 
     async function openSubgraph() {
       if (!lastAssessment || !lastAssessment.assessment_id) return;
@@ -1468,11 +1560,14 @@
       const label = { SituationAssessment: "상황평가", Anomaly: "이상징후", Observation: "관측",
         OrbitPass: "위성통과", WeatherState: "기상", NewsEvent: "뉴스", Aircraft: "항공기" };
       el.innerHTML = types.map((t) => '<span><i style="background:' + NODE_COLOR[t] + '"></i>' + label[t] + "</span>").join("") +
-        '<span style="margin-left:auto">엣지: aggregates(빨강)·cites(파랑)·evidenced_by/involves(깊이)·' +
-        '<span style="color:#38d9d9">correlated_with(청록 점선)</span></span>';
+        '<span><i style="background:none;border:1.5px dashed #c3a9ff;border-radius:50%"></i>합성 시나리오</span>' +
+        '<span style="margin-left:auto">엣지: 포함/aggregates(빨강)·인용/cites(파랑)·근거·관련 기체/evidenced_by·involves(깊이)·' +
+        '<span style="color:#38d9d9">교차 상관/correlated_with(청록 점선)</span></span>';
     }
 
     function renderSubgraph(sg) {
+      sgNodesById = {};
+      for (const n of sg.nodes) sgNodesById[n.id] = n;
       const svg = document.getElementById("sg-svg");
       while (svg.firstChild) svg.removeChild(svg.firstChild);
       const W = svg.clientWidth || 760, H = svg.clientHeight || 540;
@@ -1511,13 +1606,16 @@
         const lbl = document.createElementNS(SVGNS, "text");
         lbl.setAttribute("x", (s[0] + t[0]) / 2); lbl.setAttribute("y", (s[1] + t[1]) / 2 - 2);
         lbl.setAttribute("text-anchor", "middle"); lbl.setAttribute("class", "sg-elabel");
-        lbl.textContent = e.link_type;
+        lbl.textContent = EDGE_LABEL_KO[e.link_type] || e.link_type;
+        const lblTip = document.createElementNS(SVGNS, "title");
+        lblTip.textContent = e.link_type;   // 원어 보존(hover 툴팁)
+        lbl.appendChild(lblTip);
         svg.appendChild(lbl);
       }
       for (const n of sg.nodes) {
         const p = pos[n.id]; if (!p) continue;
         const g = document.createElementNS(SVGNS, "g");
-        g.setAttribute("class", "sg-node"); g.setAttribute("data-id", n.id);
+        g.setAttribute("class", "sg-node" + (n.is_synthetic ? " synth" : "")); g.setAttribute("data-id", n.id);
         const c = document.createElementNS(SVGNS, "circle");
         c.setAttribute("cx", p[0]); c.setAttribute("cy", p[1]);
         c.setAttribute("r", NODE_R[n.type] || 7);
@@ -1537,16 +1635,18 @@
     function selectSgNode(n) {
       document.querySelectorAll(".sg-node").forEach((el) => el.classList.toggle("sel", el.getAttribute("data-id") === n.id));
       const d = document.getElementById("sg-detail");
-      let html = "<div><b style='color:" + (NODE_COLOR[n.type] || "#fff") + "'>" + esc(n.type) + "</b></div>" +
+      const synthBadge = n.is_synthetic ? ' <span class="badge b-synth">합성</span>' : "";
+      let html = "<div><b style='color:" + (NODE_COLOR[n.type] || "#fff") + "'>" + esc(n.type) + "</b>" + synthBadge + "</div>" +
         "<div style='margin:4px 0 8px'>" + esc(n.label) + "</div>";
       html += '<div class="k">id</div><div style="word-break:break-all">' + esc(n.id) + "</div>";
       if (n.status) html += '<div class="k" style="margin-top:6px">상태</div><div>' + esc(n.status) + "</div>";
       if (n.confidence != null) html += '<div class="k" style="margin-top:6px">신뢰도</div><div>' + n.confidence + "</div>";
-      if (n.source_url) html += '<div class="k" style="margin-top:6px">원 소스</div>' +
+      if (n.source_url) html += '<div class="k" style="margin-top:6px">원 소스' +
+        (n.type === "Anomaly" ? "(첫 근거 관측 기준)" : "") + '</div>' +
         "<a href='" + esc(n.source_url) + "' target='_blank' rel='noopener'>" + esc(n.source_url) + "</a>";
       if (n.lat != null && n.lon != null) {
         html += '<div class="k" style="margin-top:6px">위치</div><div>' + n.lat.toFixed(3) + ", " + n.lon.toFixed(3) + "</div>";
-        html += "<div style='margin-top:8px'><button class='sent-map' onclick=\"highlightCite('" +
+        html += "<div style='margin-top:8px'><button class='sent-map' onclick=\"sgFocusNode('" +
           esc(n.id).replace(/'/g, "\\'") + "')\">지도에서 보기</button></div>";
       }
       d.innerHTML = html;
