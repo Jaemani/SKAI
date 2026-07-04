@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sys
 from unittest.mock import MagicMock, patch
@@ -504,6 +505,25 @@ def test_write_observation_telemetry_included_when_set():
     assert params["squawk"] == "7700"
 
 
+def test_write_observation_attrs_json():
+    """§17: obs.attrs 있으면 attrsJson 직렬화 포함, 비어있으면 생략."""
+    store, _ = _make_foundry_store_with_mock()
+    calls: list[dict] = []
+    store._apply = lambda action, params: calls.append(dict(params)) or None
+
+    obs = _valid_obs(icao24="a-attrs", ts=1_700_000_300)
+    obs.attrs = {"origin_country": "Republic of Korea"}
+    store.write_observation(obs)
+    assert json.loads(calls[0]["attrsJson"]) == {"origin_country": "Republic of Korea"}
+
+    # 빈 attrs → 파라미터 생략(회귀 방지)
+    store2, _ = _make_foundry_store_with_mock()
+    calls2: list[dict] = []
+    store2._apply = lambda action, params: calls2.append(dict(params)) or None
+    store2.write_observation(_valid_obs(icao24="a-noattrs", ts=1_700_000_400))
+    assert "attrsJson" not in calls2[0]
+
+
 def test_write_observation_within_kadiz_includes_region_id():
     """KADIZ bbox 내부 관측 → regionId='KADIZ' 포함 (E-2.2 within 배선, §16)."""
     store, _ = _make_foundry_store_with_mock()
@@ -634,6 +654,39 @@ def test_write_orbitpass_fk_params():
     assert p["startTs"].startswith("1970")  # unix 100 → ISO
 
 
+def test_write_orbitpass_ground_track_json():
+    """§17: ground_track 있으면 groundTrackJson 직렬화 포함, 비어있으면 생략."""
+    store, calls = _capture_store()
+    store.write_orbitpass(
+        OrbitPass(
+            id="pass-gt",
+            satellite_ref="25544",
+            region_ref="KADIZ",
+            start_ts=100,
+            end_ts=200,
+            max_elevation=45.0,
+            ground_track=[[36.0, 124.0], [36.1, 124.1]],
+        )
+    )
+    assert json.loads(calls[0]["params"]["groundTrackJson"]) == [
+        [36.0, 124.0],
+        [36.1, 124.1],
+    ]
+    # 빈 ground_track → 생략(회귀 방지)
+    store2, calls2 = _capture_store()
+    store2.write_orbitpass(
+        OrbitPass(
+            id="pass-nogt",
+            satellite_ref="25544",
+            region_ref="KADIZ",
+            start_ts=100,
+            end_ts=200,
+            max_elevation=45.0,
+        )
+    )
+    assert "groundTrackJson" not in calls2[0]["params"]
+
+
 def test_write_track_params():
     """create-track: aircraftIcao24(FK→Track.aircraft)·pathJson·hasGap 매핑, PK 바인딩."""
     store, calls = _capture_store()
@@ -682,6 +735,7 @@ def test_write_weatherstate_params():
     assert p["ceilingFt"] == 3000.0
     assert p["conditions"] == "MVFR"  # ← flight_category
     assert p["rawText"] == "METAR RKSI 200208KT"  # ← model.conditions(원문)
+    assert p["station"] == "RKSI"  # §17: station 파라미터 직접 write(PK 복원 불필요)
 
 
 def test_write_weatherstate_none_ceiling_sentinel():
@@ -806,7 +860,7 @@ def _raise(exc_name="ApplyActionFailedError", msg="INVALID_ARGUMENT ApplyActionF
 
 
 def test_write_anomaly_params_mapping():
-    """create-anomaly: observations=첫 근거, anomalyId(E-4 PK), correlatedWith placeholder, 스칼라·aircraft."""
+    """create-anomaly: observations=첫 근거, anomalyId(E-4 PK), correlatedWith 생략(§17 Optional), 스칼라·aircraft."""
     store, calls = _capture_store()
     store.write_anomaly(_anomaly(), evidence=["obs-a", "obs-b"], involves=["847114"])
     assert len(calls) == 1
@@ -815,7 +869,9 @@ def test_write_anomaly_params_mapping():
     assert p["observations"] == "obs-a"  # 첫 근거만 Foundry(단일 파라미터)
     assert p["anomalyId"] == "anomaly-1"  # E-4 리네임 PK (구 newParameter)
     assert "newParameter" not in p  # 리네임됨(§15)
-    assert p["correlatedWith"] == "none"  # required(E-2.3) → present-only placeholder
+    assert (
+        "correlatedWith" not in p
+    )  # §17 Optional 강등 → placeholder 생략(구 "none" 폐기)
     assert p["confidence"] == 0.9
     assert p["status"] == "candidate"
     assert p["explanation"] == "obs-grounded"
@@ -838,6 +894,46 @@ def test_write_anomaly_e3_attrs_wired():
     store2.write_anomaly(_anomaly(), evidence=["obs-a"])
     assert "explainerBackend" not in calls2[0]["params"]
     assert "createdAt" not in calls2[0]["params"]
+
+
+def test_write_assessment_sentences_json():
+    """§17: write_assessment가 문장별 cites를 sentencesJson으로 직렬화(Foundry 스파인 provenance)."""
+    from ontology.model import AssessmentSentence, SituationAssessment
+
+    store, calls = _capture_store()
+    store.write_assessment(
+        SituationAssessment(
+            id="assess-KADIZ-9",
+            region_ref="KADIZ",
+            window_start=1,
+            window_end=2,
+            query="q",
+            summary="headline",
+            sentences=[
+                AssessmentSentence(
+                    text="근거 문장",
+                    cites=["abc123-100"],
+                    confidence=0.9,
+                    kind="summary",
+                ),
+                AssessmentSentence(
+                    text="위성 문장",
+                    cites=["pass-25544-100"],
+                    confidence=0.7,
+                    kind="satellite",
+                ),
+            ],
+            confidence=0.8,
+            produced_by="template",
+            created_at=100,
+        )
+    )
+    p = calls[0]["params"]
+    assert calls[0]["action"] == "create-situation-assessment"
+    assert p["assessmentId"] == "assess-KADIZ-9"
+    decoded = json.loads(p["sentencesJson"])
+    assert [s["cites"] for s in decoded] == [["abc123-100"], ["pass-25544-100"]]
+    assert decoded[0]["kind"] == "summary"
 
 
 def test_write_anomaly_empty_evidence_rejected_foundry():
