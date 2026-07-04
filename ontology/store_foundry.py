@@ -1,42 +1,52 @@
 """FoundryOntologyStore + HybridStore — Foundry 하이브리드 저장 어댑터 (DR-0009).
 
-## 무엇 (DR-0009 결정)
-Foundry 온톨로지는 현재 **Aircraft·Observation·Region·Anomaly** Object Type이 구축돼 있다.
-전량 이관 대신 **하이브리드**로 간다:
+## 무엇 (DR-0009 결정 + P7 §10 실측 확장)
+Foundry 온톨로지에 **11 Object Type**이 구축돼 있다(Aircraft·Observation·Region·Anomaly·
+Operator·Track·Satellite·OrbitPass·WeatherState·NewsEvent·SituationAssessment). P7 §9~§10
+재검증으로 D-2·D-3·D-5·D-6이 해소돼(신규 7타입 PK 파라미터·set-alert Modify화·composed_of·
+self-link 해제) **write 배선이 가능**해졌다. 이 어댑터는 그 실측(P7 §10-7 B목록)을 코드로 옮긴다.
 
-- **FoundryOntologyStore**: Aircraft·Observation을 Foundry에 write(액션)/read(저수준 SDK).
-- **HybridStore**: Aircraft·Observation → Foundry, **나머지 전부 → LocalOntologyStore**.
-  `SKAI_STORE=foundry`로 활성화(미설정이면 순수 로컬 — 데모 재현성 보존).
+- **FoundryOntologyStore**: Aircraft·Observation·Operator·Satellite·OrbitPass·Track·
+  WeatherState·NewsEvent를 Foundry에 write(create 액션)/read(저수준 SDK). SituationAssessment는
+  스칼라만 write(문장 cites는 스키마에 없음 → 로컬 권위본과 짝).
+- **HybridStore**: 위 8종 → Foundry(정보소재), Region·Anomaly·산출 인텔 문장·provenance
+  MANY-MANY 링크 → LocalOntologyStore. `SKAI_STORE=foundry`로 활성화(미설정이면 순수 로컬).
 
-## observed_as 링크 (P7 §7-2 확인)
-write_observation의 `aircraftIcao24` FK 파라미터로 **자동 형성**된다.
-별도 link() 호출 불필요 — HybridStore.link(observed_as)는 no-op.
+## 링크 (P7 §10-3 실측)
+- **FK 링크는 객체 write의 FK 파라미터로 자동 형성**: observed_as(aircraftIcao24)·
+  operated_by(operatorRef)·of(satelliteNoradId)·Track→Aircraft(aircraftIcao24)·
+  WeatherState→Region(regionId)·SituationAssessment→Region(regionId). 별도 link() 불필요.
+- **composed_of(Observation↔Track)**: edit-observation의 `trackId`로만 채운다(custody 확정 후
+  귀속, create엔 파라미터 없음 — P7 §10-4). HybridStore.link(composed_of)가 이 경로로 라우팅.
+- **over(OrbitPass→Region)**: 링크 미형성(regionId는 속성으로만 저장, P7 §10-3 잔존). traverse 불가.
+- **MANY-MANY provenance 링크(evidenced_by·involves·correlated_with·mentions·aggregates·cites)**:
+  Foundry측이 불안정/오배선(P7 §9-4·§10-2) → **로컬 링크 테이블이 권위본**. write_anomaly는 Foundry
+  미구현(D-1 미해소)이라 Anomaly·그 근거 링크는 통째로 로컬.
 
-## read = 저수준 SDK (P0B §8-3 "read=OSDK" 대비 변경)
-저수준 `foundry_sdk`(1.97.0)의 `OntologyObject.list/get`으로 Aircraft·Observation 읽기.
-OSDK 0.3.0도 발행됐으나(Aircraft·Observation·Region·Anomaly Object + Action 12개)
-저수준 SDK는 재발행 없이 라이브 스키마를 dict로 읽어 더 견고.
-
-## 스키마 잔여 이슈 (P7 §7 실측, Ontology Manager UI 대응 필요)
-1. `newParameter` 파라미터 오명명 — 기능은 PK 바인딩으로 정상이나 이름이 혼동스러움.
-   → icao24/obsId로 UI 리네임 권장(기능 영향 없음).
-2. Foundry Observation에 `attrs` 속성 없음 → model.attrs(origin_country 등) 저장 안 됨.
-3. Anomaly/Region write: evidence·confidence·status 파라미터 부재(§7-4) → 로컬 유지.
-4. Region: PK 바인딩 파라미터 없어 dedup 불가(자동 UUID).
+## 스키마 잔여 이슈 (P7 §10 실측 — 코드로 못 고침, Ontology Manager UI 대응)
+1. `newParameter` 오명명 — 기능은 PK 바인딩으로 정상(icao24/obsId/… 리네임 권장).
+2. Foundry Observation에 `attrs` 속성 없음(origin_country 등 미저장). OrbitPass에 ground_track 없음.
+   WeatherState에 station 속성 없음(weatherId PK에서 복원). SituationAssessment에 sentences 없음.
+3. write_anomaly: create-anomaly가 valid refs로도 ApplyActionFailed 재발(범인=미제거 required
+   objectSet `newParameter1`, P7 §10-2) → 로컬 유지.
+4. set-region-alert-level은 OSDK 0.5.0 발행 누락이나 저수준 SDK로 정상 실행(P7 §10-6).
 
 ## provenance
-write_observation은 백엔드 무관하게 store.validate_provenance로 source·source_url·ts를
-강제한다(누락 write 거부). = 환각방지 백본은 Foundry에서도 동일 적용.
+write_observation·write_weatherstate·write_newsevent는 백엔드 무관하게 store.validate_provenance로
+source·source_url·ts를 강제한다(누락 write 거부). = 환각방지 백본은 Foundry에서도 동일 적용.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 from typing import Optional, Sequence
 
 from ontology.model import (
+    NEWS_MAX_CONFIDENCE,
     Aircraft,
     Anomaly,
     NewsEvent,
@@ -55,16 +65,31 @@ from ontology.store_local import DEFAULT_DB, LocalOntologyStore
 # 사용자 온톨로지 rid (P0B §8-2 실측, OSDK 내장값과 동일).
 DEFAULT_ONT_RID = "ri.ontology.main.ontology.33d94264-3352-4354-aadf-840ccb0f2a0c"
 
-# 액션 API name (2026-07-04 introspection).
+# 액션 API name (2026-07-04 P7 §10 introspection).
 ACTION_CREATE_AIRCRAFT = "create-aircraft"
 ACTION_CREATE_OBSERVATION = "create-observation"
+ACTION_EDIT_OBSERVATION = "edit-observation"
+ACTION_CREATE_OPERATOR = "create-operator"
+ACTION_CREATE_SATELLITE = "create-satellite"
+ACTION_CREATE_ORBIT_PASS = "create-orbit-pass"
+ACTION_CREATE_TRACK = "create-track"
+ACTION_CREATE_WEATHER_STATE = "create-weather-state"
+ACTION_CREATE_NEWS_EVENT = "create-news-event"
+ACTION_CREATE_SITUATION_ASSESSMENT = "create-situation-assessment"
+ACTION_SET_REGION_ALERT_LEVEL = "set-region-alert-level"
+ACTION_DELETE_ORBIT_PASS = "delete-orbit-pass"
+
+# create-*가 실세계 mention/근거 객체를 못 받을 때 required object 파라미터에 넣는 placeholder.
+# P7 §9-4·§10-6 실측: 존재하지 않는 ref도 present-only로 EXECUTE 통과(링크는 안 맺힘). 권위 링크는
+# 로컬에 별도 저장하므로 이 placeholder는 "required 충족"만 담당하고 그래프 의미는 없다.
+_ABSENT_REF = "none"
 
 
 class FoundryUnsupportedError(NotImplementedError):
-    """Foundry에 아직 스키마가 없는 Object Type/메서드 호출.
+    """Foundry에 아직 배선 못 한 Object Type/메서드 호출.
 
     HybridStore가 라우팅을 잘못했거나, FoundryOntologyStore를 단독으로 (로컬 위임 없이)
-    쓰면서 미구축 객체를 건드릴 때 난다. 갭 목록은 이 파일 상단 참조.
+    쓰면서 미배선 객체를 건드릴 때 난다. 잔여 갭은 이 파일 상단 참조.
     """
 
 
@@ -88,16 +113,71 @@ def _iso_to_unix(v) -> int:
         return 0
 
 
+def _iso_param(v) -> str:
+    """Foundry에서 읽은 timestamp를 다시 Foundry timestamp 파라미터로 보낼 때 정규화(round-trip)."""
+    return _unix_to_iso(_iso_to_unix(v))
+
+
+def _wind_str(weather: WeatherState) -> str:
+    """model의 wind_dir/wind_speed_kt를 Foundry WeatherState.wind(단일 문자열)로 합성.
+
+    Foundry는 방향/속도를 분해하지 않고 "200/8"류 문자열 1개로 보관한다. 가변풍(dir=None)은 "VRB".
+    둘 다 없으면 required 파라미터 충족용 "VRB"를 낸다(빈 문자열 회피).
+    """
+    d, s = weather.wind_dir, weather.wind_speed_kt
+    if d is not None and s is not None:
+        return f"{int(d):03d}/{int(round(s))}"
+    if s is not None:
+        return f"VRB/{int(round(s))}"
+    return "VRB"
+
+
+def _station_from_weather_id(weather_id: str) -> str:
+    """weatherId PK(f"wx-{station}-{ts}")에서 station 복원.
+
+    Foundry WeatherState에 station 속성이 없어(스키마 갭) PK에서 되읽는다. 형식이 다르면 "".
+    """
+    if not weather_id or not weather_id.startswith("wx-"):
+        return ""
+    rest = weather_id[3:]
+    # 뒤에서 첫 '-'까지가 ts → 그 앞이 station(공항 ICAO는 '-' 없음).
+    return rest.rsplit("-", 1)[0] if "-" in rest else rest
+
+
+def _parse_wind(wind: Optional[str]) -> tuple[Optional[int], Optional[float]]:
+    """Foundry wind 문자열("200/8"/"VRB/8") → (wind_dir, wind_speed_kt). 실패 시 (None, None)."""
+    if not wind or "/" not in wind:
+        return None, None
+    d_str, s_str = wind.split("/", 1)
+    d = None if d_str.upper().startswith("VRB") else _safe_int(d_str)
+    return d, _safe_float(s_str)
+
+
+def _safe_int(v):
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_float(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def _warn(msg: str) -> None:
     print(f"[store_foundry] {msg}", file=sys.stderr)
 
 
 class FoundryOntologyStore:
-    """Aircraft·Observation 전용 Foundry 어댑터 (write=액션, read=저수준 SDK).
+    """Foundry 어댑터 (write=create 액션, read=저수준 SDK).
 
-    이 스토어가 직접 지원하는 것은 Aircraft·Observation·observed_as 뿐이다. 나머지
-    Protocol 메서드는 FoundryUnsupportedError를 던진다 — HybridStore가 그것들을
-    LocalOntologyStore로 라우팅하므로 정상 흐름에선 호출되지 않는다.
+    지원(Foundry 소재): Aircraft·Observation·Operator·Satellite·OrbitPass·Track·WeatherState·
+    NewsEvent(객체) + SituationAssessment(스칼라 스파인). 그 밖의 Protocol 메서드는
+    FoundryUnsupportedError를 던진다 — HybridStore가 그것들을 LocalOntologyStore로 라우팅하므로
+    정상 흐름에선 호출되지 않는다.
     """
 
     def __init__(
@@ -125,6 +205,8 @@ class FoundryOntologyStore:
         # 세션 간(크로스런) ObjectAlreadyExists는 write 메서드에서 catch·skip.
         self._written_aircraft: dict[str, str] = {}  # icao24 → foundry pk
         self._written_obs: set[str] = set()  # obs.id(자연키)
+        # 신규 7타입 공용 dedup: {kind: {pk, ...}}
+        self._written_other: dict[str, set[str]] = {}
 
     # ── 내부: 액션 apply ──────────────────────────
     def _apply(self, action: str, parameters: dict):
@@ -152,6 +234,25 @@ class FoundryOntologyStore:
             or "already exists" in msg
         )
 
+    def _create_object(self, kind: str, pk: str, action: str, params: dict) -> None:
+        """PK 프로세스내 dedup + create 액션 apply + ObjectAlreadyExists skip (신규 7타입 공용).
+
+        기존 write_aircraft/write_observation의 인라인 dedup 패턴을 신규 타입으로 일반화한 것.
+        """
+        seen = self._written_other.setdefault(kind, set())
+        if pk in seen:
+            return  # 프로세스 내 dedup
+        try:
+            self._apply(action, params)
+            seen.add(pk)
+        except Exception as e:
+            if self._is_already_exists(e):
+                # 크로스런 dedup: 같은 PK가 이미 Foundry에 있음 → skip.
+                _warn(f"{action}: {pk} 이미 존재 (skip)")
+                seen.add(pk)
+            else:
+                raise
+
     # ── write (Foundry) ───────────────────────────
     def write_aircraft(self, aircraft: Aircraft) -> None:
         if aircraft.icao24 in self._written_aircraft:
@@ -166,7 +267,7 @@ class FoundryOntologyStore:
         if aircraft.type:
             params["type"] = aircraft.type
         if aircraft.operator_ref:
-            params["operatorRef"] = aircraft.operator_ref
+            params["operatorRef"] = aircraft.operator_ref  # FK → operated_by(Operator)
         try:
             pk = self._apply(ACTION_CREATE_AIRCRAFT, params)
             self._written_aircraft[aircraft.icao24] = pk or aircraft.icao24
@@ -216,20 +317,232 @@ class FoundryOntologyStore:
                 raise
         # 잔여 갭: obs.attrs(origin_country 등) Foundry Observation에 attrs 속성 없어 저장 안 됨.
 
+    def write_operator(self, operator: Operator) -> None:
+        # create-operator: name·kind·country 전부 required(P7 §10 introspection).
+        params = {
+            "name": operator.name or operator.id,
+            "kind": operator.kind or "unknown",
+            "country": operator.country
+            or "unknown",  # req; model Optional → 비어있으면 placeholder
+            "newParameter": operator.id,  # operatorId PK 바인딩
+        }
+        self._create_object("Operator", operator.id, ACTION_CREATE_OPERATOR, params)
+
+    def write_satellite(self, satellite: Satellite) -> None:
+        # create-satellite: name·objectType·operatorRef·tleEpoch 전부 required.
+        params = {
+            "name": satellite.name or satellite.norad_id,
+            "objectType": satellite.object_type or "UNKNOWN",
+            "operatorRef": satellite.operator_ref or "UNKNOWN",
+            # tleEpoch=timestamp(req). model은 ISO 문자열 or None → None이면 현재시각으로 대체.
+            "tleEpoch": satellite.tle_epoch or _unix_to_iso(int(time.time())),
+            "newParameter": satellite.norad_id,  # noradId PK 바인딩
+        }
+        self._create_object(
+            "Satellite", satellite.norad_id, ACTION_CREATE_SATELLITE, params
+        )
+
+    def write_orbitpass(self, orbit_pass: OrbitPass) -> None:
+        # create-orbit-pass: satelliteNoradId(FK→of)·regionId(over 속성)·startTs·endTs·maxElevation req.
+        # 잔여 갭: ground_track은 Foundry OrbitPass에 속성 없음 → 저장 안 됨(지도 궤적 레이어는 로컬 폴백).
+        params = {
+            "satelliteNoradId": orbit_pass.satellite_ref,  # FK → OrbitPass.satellite(of)
+            "regionId": orbit_pass.region_ref,  # 속성만(over 링크 미형성, P7 §10-3)
+            "startTs": _unix_to_iso(orbit_pass.start_ts),
+            "endTs": _unix_to_iso(orbit_pass.end_ts),
+            "maxElevation": float(orbit_pass.max_elevation),
+            "newParameter": orbit_pass.id,  # passId PK 바인딩
+        }
+        self._create_object(
+            "OrbitPass", orbit_pass.id, ACTION_CREATE_ORBIT_PASS, params
+        )
+
+    def write_track(self, track: Track) -> None:
+        # create-track: aircraftIcao24(FK→Track.aircraft)·startTs·endTs·hasGap·pathJson req.
+        params = {
+            "aircraftIcao24": track.aircraft_ref,  # FK → Track.aircraft
+            "startTs": _unix_to_iso(track.start_ts),
+            "endTs": _unix_to_iso(track.end_ts),
+            "hasGap": bool(track.has_gap),
+            "pathJson": json.dumps(track.path),
+            "newParameter": track.id,  # trackId PK 바인딩
+        }
+        self._create_object("Track", track.id, ACTION_CREATE_TRACK, params)
+
+    def write_weatherstate(self, weather: WeatherState) -> None:
+        # provenance 강제(뉴스·기상은 증거 객체) — source/source_url/ts 누락이면 ProvenanceError.
+        validate_provenance(weather)
+        # create-weather-state: 전부 required. Foundry 매핑:
+        #   conditions ← model.flight_category(VFR/MVFR..), rawText ← model.conditions(원문 METAR).
+        #   station은 Foundry 속성 없음 → weatherId PK(f"wx-{station}-{ts}")로 복원.
+        params = {
+            "regionId": weather.region_ref,  # FK → WeatherState.region
+            "ts": _unix_to_iso(weather.ts),
+            "wind": _wind_str(weather),
+            "visibilitySm": float(weather.visibility_sm)
+            if weather.visibility_sm is not None
+            else 0.0,
+            # ceilingFt=req. model의 None(무제한)을 0.0으로 보내면 의미 왜곡 → 큰 값으로 표기.
+            "ceilingFt": float(weather.ceiling_ft)
+            if weather.ceiling_ft is not None
+            else 99999.0,
+            "conditions": weather.flight_category or "UNKNOWN",
+            "rawText": weather.conditions or weather.id,
+            "source": weather.source,
+            "sourceUrl": weather.source_url,
+            "newParameter": weather.id,  # weatherId PK 바인딩
+        }
+        self._create_object(
+            "WeatherState", weather.id, ACTION_CREATE_WEATHER_STATE, params
+        )
+
+    def write_newsevent(self, news: NewsEvent, mentions: Sequence[tuple] = ()) -> None:
+        # provenance 강제 + confidence 상한 clamp(DR-0005).
+        validate_provenance(news)
+        confidence = min(news.confidence, NEWS_MAX_CONFIDENCE)
+        # create-news-event: aircraft·operators·regions 전부 required object(present-only, P7 §9-4).
+        #   mentions=[(dst_type, dst_id)]에서 타입별로 첫 ref를 채우고, 없으면 placeholder.
+        #   ⚠️ Foundry MANY-MANY mention 링크는 불안정(§9-4) → 권위 링크는 HybridStore가 로컬에 저장.
+        m_by_type: dict[str, str] = {}
+        for dst_type, dst_id in mentions:
+            m_by_type.setdefault(dst_type, dst_id)
+        params = {
+            "source": news.source,
+            "url": news.source_url,  # Foundry url = model source_url(citation PK)
+            "ts": _unix_to_iso(news.ts),
+            "title": news.title or news.id,
+            "summary": news.summary or "",
+            "entitiesJson": json.dumps(news.entities, ensure_ascii=False),
+            "confidence": float(confidence),
+            "lat": float(news.lat) if news.lat is not None else 0.0,
+            "lon": float(news.lon) if news.lon is not None else 0.0,
+            "aircraft": m_by_type.get("Aircraft", _ABSENT_REF),
+            "operators": m_by_type.get("Operator", _ABSENT_REF),
+            "regions": m_by_type.get("Region", _ABSENT_REF),
+            "newParameter": news.id,  # newsId PK 바인딩
+        }
+        self._create_object("NewsEvent", news.id, ACTION_CREATE_NEWS_EVENT, params)
+
+    def write_assessment(self, assessment: SituationAssessment) -> None:
+        """SituationAssessment 스칼라를 Foundry에 write(AIP 스파인).
+
+        ⚠️ Foundry SituationAssessment에 sentences 속성이 없다(P7 §9-2) → 문장별 cites(DR-0006
+        provenance 백본)는 저장 못 한다. 권위본(문장 cites·aggregates/cites 링크)은 로컬이 보관하고
+        (HybridStore가 dual-write), 여기서는 스칼라 요약만 스파인으로 밀어 넣는다.
+        create-situation-assessment의 anomalies·newsEvents·observations·orbitPasses(전부 required
+        object)는 present-only placeholder로 충족(교차백엔드 Anomaly ref는 Foundry에 없음).
+        """
+        params = {
+            "regionId": assessment.region_ref,  # FK → SituationAssessment.region
+            "windowStart": _unix_to_iso(assessment.window_start),
+            "windowEnd": _unix_to_iso(assessment.window_end),
+            "summary": assessment.summary or assessment.id,
+            "confidence": float(assessment.confidence),
+            "producedBy": assessment.produced_by or "template",
+            "createdAt": _unix_to_iso(assessment.created_at),
+            # required object 파라미터(present-only) — 실 provenance 링크는 로컬 권위본.
+            "anomalies": _ABSENT_REF,
+            "newsEvents": _ABSENT_REF,
+            "observations": _ABSENT_REF,
+            "orbitPasses": _ABSENT_REF,
+            "newParameter": assessment.id,  # assessmentId PK 바인딩
+        }
+        self._create_object(
+            "SituationAssessment",
+            assessment.id,
+            ACTION_CREATE_SITUATION_ASSESSMENT,
+            params,
+        )
+
+    def set_region_alert_level(self, region_id: str, alert_level: str) -> None:
+        """Region.alertLevel 전이(set-region-alert-level Modify 액션, P7 §10-1 D-2 해소).
+
+        OSDK 0.5.0엔 이 액션이 누락됐으나(§10-6) 저수준 SDK Action.apply로는 정상 실행된다.
+        """
+        self._apply(
+            ACTION_SET_REGION_ALERT_LEVEL,
+            {"region": region_id, "alertLevel": alert_level},
+        )
+
     def link(
         self, src_type: str, src_id: str, link_type: str, dst_type: str, dst_id: str
     ) -> None:
         # observed_as: write_observation의 aircraftIcao24 FK로 자동 형성(§7-2) → no-op.
         if link_type == "observed_as":
             return
+        # composed_of: Observation.trackId(FK)를 edit-observation으로 채워 Track에 귀속(P7 §10-4/§10-5).
+        #   custody.py는 link("Track", track.id, "composed_of", "Observation", obs.id)로 호출.
+        if link_type == "composed_of":
+            obs_id, track_id = (
+                (dst_id, src_id) if dst_type == "Observation" else (src_id, dst_id)
+            )
+            self._set_observation_track(obs_id, track_id)
+            return
         raise FoundryUnsupportedError(
-            f"FoundryOntologyStore.link: {link_type}는 Foundry 미지원 "
-            "(observed_as만 처리, 나머지는 HybridStore가 로컬로 라우팅)."
+            f"FoundryOntologyStore.link: {link_type}는 Foundry 미배선 "
+            "(observed_as·composed_of만 처리, MANY-MANY provenance 링크는 로컬 권위본)."
         )
+
+    def _set_observation_track(self, obs_id: str, track_id: str) -> None:
+        """edit-observation으로 기존 Observation의 trackId를 세팅(composed_of).
+
+        edit-observation은 텔레메트리(alt·heading·squawk·velocity)까지 전부 required라, 현재 Foundry
+        값을 되읽어 재공급한다(P7 §10 introspection: create는 optional이나 edit는 required).
+        """
+        d = self._get_object("Observation", obs_id)
+        if not d:
+            _warn(f"composed_of: Observation {obs_id} 미존재 → trackId 세팅 skip")
+            return
+        params = {
+            "Observation": obs_id,
+            "lat": float(d.get("lat") or 0.0),
+            "lon": float(d.get("lon") or 0.0),
+            "alt": float(d.get("alt") or 0.0),
+            "heading": float(d.get("heading") or 0.0),
+            "velocity": float(d.get("velocity") or 0.0),
+            "squawk": d.get("squawk") or "0000",
+            "onGround": bool(d.get("onGround")),
+            "source": d.get("source") or "",
+            "sourceUrl": d.get("sourceUrl") or "",
+            "ts": _iso_param(d.get("ts")),
+            "newParameter": obs_id,  # obsId PK
+            "trackId": track_id,  # FK → composed_of
+        }
+        self._apply(ACTION_EDIT_OBSERVATION, params)
+
+    def delete_future_orbitpasses_for(self, satellite_ref: str, now_ts: int) -> int:
+        """한 위성의 미래 통과창(start_ts >= now_ts)을 Foundry에서 삭제(재계산 전 정리).
+
+        LocalOntologyStore.delete_future_orbitpasses_for의 Foundry판(P7 §10-7 B-3). of/over 링크는
+        FK/속성이라 객체 삭제로 함께 사라진다. 반환: 삭제된 pass 수.
+        """
+        deleted = 0
+        seen = self._written_other.setdefault("OrbitPass", set())
+        for d in self._list_objects("OrbitPass"):
+            if d.get("satelliteNoradId") != satellite_ref:
+                continue
+            if _iso_to_unix(d.get("startTs")) < now_ts:
+                continue
+            pid = d.get("passId")
+            if not pid:
+                continue
+            try:
+                self._apply(ACTION_DELETE_ORBIT_PASS, {"OrbitPass": pid})
+                deleted += 1
+                seen.discard(pid)  # 재작성 허용(dedup 캐시에서 제거)
+            except Exception as e:
+                _warn(f"delete-orbit-pass {pid} 실패: {e!r}")
+        return deleted
 
     # ── read (Foundry, 저수준 SDK dict→dataclass) ──
     def _list_objects(self, object_type: str) -> list[dict]:
         return list(self._pf.ontologies.OntologyObject.list(self.ont, object_type))
+
+    def _get_object(self, object_type: str, pk: str) -> Optional[dict]:
+        try:
+            return self._pf.ontologies.OntologyObject.get(self.ont, object_type, pk)
+        except Exception:
+            return None
 
     @staticmethod
     def _dict_to_aircraft(d: dict) -> Aircraft:
@@ -260,6 +573,91 @@ class FoundryOntologyStore:
             attrs={},
         )
 
+    @staticmethod
+    def _dict_to_operator(d: dict) -> Operator:
+        return Operator(
+            id=d.get("operatorId"),
+            name=d.get("name"),
+            kind=d.get("kind"),
+            country=d.get("country"),
+        )
+
+    @staticmethod
+    def _dict_to_satellite(d: dict) -> Satellite:
+        te = d.get("tleEpoch")
+        return Satellite(
+            norad_id=d.get("noradId"),
+            name=d.get("name"),
+            operator_ref=d.get("operatorRef"),
+            object_type=d.get("objectType"),
+            tle_epoch=str(te) if te is not None else None,
+            source="celestrak",
+            source_url="",
+        )
+
+    @staticmethod
+    def _dict_to_orbitpass(d: dict) -> OrbitPass:
+        return OrbitPass(
+            id=d.get("passId"),
+            satellite_ref=d.get("satelliteNoradId") or "",
+            region_ref=d.get("regionId") or "",
+            start_ts=_iso_to_unix(d.get("startTs")),
+            end_ts=_iso_to_unix(d.get("endTs")),
+            max_elevation=d.get("maxElevation") or 0.0,
+            ground_track=[],  # Foundry OrbitPass에 속성 없음(로컬 폴백)
+            source="celestrak",
+            source_url="",
+        )
+
+    @staticmethod
+    def _dict_to_track(d: dict) -> Track:
+        return Track(
+            id=d.get("trackId"),
+            aircraft_ref=d.get("aircraftIcao24") or "",
+            start_ts=_iso_to_unix(d.get("startTs")),
+            end_ts=_iso_to_unix(d.get("endTs")),
+            path=json.loads(d.get("pathJson") or "[]"),
+            has_gap=bool(d.get("hasGap")),
+        )
+
+    @staticmethod
+    def _dict_to_weather(d: dict) -> WeatherState:
+        wid = d.get("weatherId")
+        wind_dir, wind_speed = _parse_wind(d.get("wind"))
+        cft = d.get("ceilingFt")
+        return WeatherState(
+            id=wid,
+            region_ref=d.get("regionId") or "",
+            ts=_iso_to_unix(d.get("ts")),
+            station=_station_from_weather_id(wid),
+            wind_dir=wind_dir,
+            wind_speed_kt=wind_speed,
+            visibility_sm=d.get("visibilitySm"),
+            # ceilingFt sentinel(99999=무제한)은 다시 None으로 복원.
+            ceiling_ft=None if cft is None or cft >= 99999 else int(cft),
+            flight_category=d.get("conditions"),
+            conditions=d.get("rawText") or "",
+            source=d.get("source") or "",
+            source_url=d.get("sourceUrl") or "",
+            attrs={},
+        )
+
+    @staticmethod
+    def _dict_to_news(d: dict) -> NewsEvent:
+        return NewsEvent(
+            id=d.get("newsId"),
+            source=d.get("source") or "",
+            source_url=d.get("url") or "",
+            ts=_iso_to_unix(d.get("ts")),
+            title=d.get("title") or "",
+            summary=d.get("summary") or "",
+            lat=d.get("lat"),
+            lon=d.get("lon"),
+            confidence=d.get("confidence") or 0.0,
+            entities=json.loads(d.get("entitiesJson") or "[]"),
+            attrs={},
+        )
+
     def query_aircraft(self) -> list[Aircraft]:
         return [self._dict_to_aircraft(d) for d in self._list_objects("Aircraft")]
 
@@ -287,89 +685,126 @@ class FoundryOntologyStore:
         return list(latest.values())
 
     def get_observation(self, obs_id: str) -> Optional[Observation]:
-        try:
-            d = self._pf.ontologies.OntologyObject.get(self.ont, "Observation", obs_id)
-        except Exception:
-            return None
+        d = self._get_object("Observation", obs_id)
         return self._dict_to_obs(d) if d else None
+
+    def query_operators(self) -> list[Operator]:
+        return [self._dict_to_operator(d) for d in self._list_objects("Operator")]
+
+    def query_satellites(self) -> list[Satellite]:
+        return [self._dict_to_satellite(d) for d in self._list_objects("Satellite")]
+
+    def satellite_map(self) -> dict[str, Satellite]:
+        return {s.norad_id: s for s in self.query_satellites()}
+
+    def query_orbitpasses(self) -> list[OrbitPass]:
+        passes = [self._dict_to_orbitpass(d) for d in self._list_objects("OrbitPass")]
+        passes.sort(key=lambda p: p.start_ts)
+        return passes
+
+    def query_tracks(self) -> list[Track]:
+        return [self._dict_to_track(d) for d in self._list_objects("Track")]
+
+    def query_weather_latest(self) -> list[WeatherState]:
+        """공항(station)별 최신 기상 1건. station은 weatherId PK에서 복원해 그룹핑."""
+        latest: dict[str, WeatherState] = {}
+        for w in (self._dict_to_weather(d) for d in self._list_objects("WeatherState")):
+            key = w.station or w.id
+            cur = latest.get(key)
+            if cur is None or w.ts > cur.ts:
+                latest[key] = w
+        return list(latest.values())
+
+    def query_news(self) -> list[NewsEvent]:
+        news = [self._dict_to_news(d) for d in self._list_objects("NewsEvent")]
+        news.sort(key=lambda n: n.ts, reverse=True)
+        return news
 
     def counts(self) -> dict[str, int]:
         return {
             "aircraft": len(self._list_objects("Aircraft")),
             "observation": len(self._list_objects("Observation")),
+            "operator": len(self._list_objects("Operator")),
+            "satellite": len(self._list_objects("Satellite")),
+            "orbitpass": len(self._list_objects("OrbitPass")),
+            "track": len(self._list_objects("Track")),
+            "weatherstate": len(self._list_objects("WeatherState")),
+            "newsevent": len(self._list_objects("NewsEvent")),
         }
 
-    # ── 미지원 (Foundry 미구축 객체 — HybridStore가 로컬로 라우팅) ──
+    # ── 미배선 (Foundry 스키마 결함 — HybridStore가 로컬로 라우팅) ──
     def _unsupported(self, name: str):
         raise FoundryUnsupportedError(
-            f"FoundryOntologyStore.{name}: Foundry에 해당 Object Type 미구축 "
-            "(HybridStore를 쓰면 로컬로 위임됨). 갭 목록은 store_foundry 상단 참조."
+            f"FoundryOntologyStore.{name}: Foundry 미배선 "
+            "(HybridStore를 쓰면 로컬로 위임됨). 잔여 갭은 store_foundry 상단 참조."
         )
 
     def write_region(self, region: Region) -> None:
-        # Foundry write 미구현: Region에 PK 바인딩 파라미터 없어 dedup 불가(자동 UUID).
-        # UI 선행조건: id PK 바인딩 파라미터 추가 필요.
-        # → 로컬 유지(HybridStore.__getattr__이 LocalOntologyStore로 위임).
+        # Region write는 로컬 유지: FK 타깃(regionId)은 데모 자산(KADIZ)으로 별도 시딩하고,
+        # 앱의 Region 관리(지오펜스 폴리곤 등)는 로컬이 권위본. HybridStore가 로컬로 위임.
         self._unsupported("write_region")
 
-    def write_track(self, track: Track) -> None:
-        self._unsupported("write_track")
-
     def write_anomaly(self, anomaly, evidence, involves=()) -> None:
-        # Foundry write 미구현: create-anomaly에 confidence·status·explanation 파라미터가 없어
-        # provenance 정보(근거 링크·신뢰도·상태·설명)를 손실 없이 쓸 수 없음(프로젝트 원칙 위반).
-        # UI 선행조건: evidenced_by 링크 파라미터 + confidence/status/explanation 파라미터 추가.
-        # → 로컬 유지.
+        # Foundry write 미구현(P7 §10-2 D-1 미해소): create-anomaly가 valid refs로도 ApplyActionFailed
+        # 재발(범인=미제거 required objectSet `newParameter1`). Anomaly 스칼라는 생성되나 evidenced_by
+        # 엣지가 불안정+half-Anomaly 잔존 → provenance 백본을 손실 없이 못 씀. → 로컬 권위본 유지.
         self._unsupported("write_anomaly")
-
-    def write_satellite(self, satellite: Satellite) -> None:
-        self._unsupported("write_satellite")
-
-    def write_orbitpass(self, orbit_pass: OrbitPass) -> None:
-        self._unsupported("write_orbitpass")
-
-    def write_weatherstate(self, weather: WeatherState) -> None:
-        self._unsupported("write_weatherstate")
-
-    def write_newsevent(self, news: NewsEvent, mentions=()) -> None:
-        self._unsupported("write_newsevent")
-
-    def write_operator(self, operator: Operator) -> None:
-        self._unsupported("write_operator")
-
-    def write_assessment(self, assessment: SituationAssessment) -> None:
-        self._unsupported("write_assessment")
 
     def query_regions(self):
         self._unsupported("query_regions")
-
-    def query_tracks(self):
-        self._unsupported("query_tracks")
 
     def query_anomalies(self):
         self._unsupported("query_anomalies")
 
 
-# 어떤 Protocol 메서드를 Foundry로 보내는가 (나머지는 전부 LocalOntologyStore).
+# 어떤 Protocol 메서드를 Foundry로 보내는가 (문서용; 실제 라우팅은 HybridStore의 명시 메서드).
+# 나머지(Region·Anomaly·문장 cites·MANY-MANY provenance 링크 read)는 __getattr__로 로컬 위임.
 _FOUNDRY_METHODS = frozenset(
     {
+        # write (정보 소재를 Foundry로)
         "write_aircraft",
         "write_observation",
+        "write_operator",
+        "write_satellite",
+        "write_orbitpass",
+        "write_track",
+        "write_weatherstate",
+        "write_newsevent",
+        # read
         "query_aircraft",
         "aircraft_map",
         "query_all_observations",
         "query_observations_for",
         "query_latest_observations",
         "get_observation",
+        "query_operators",
+        "query_satellites",
+        "satellite_map",
+        "query_orbitpasses",
+        "query_tracks",
+        "query_weather_latest",
+        "query_news",
+        # 정리·전이
+        "delete_future_orbitpasses_for",
+        "set_region_alert_level",
     }
 )
 
 
 class HybridStore:
-    """Aircraft·Observation·observed_as → Foundry, 나머지 → LocalOntologyStore (DR-0009).
+    """정보 소재를 Foundry(스파인)와 Local(보험/문장·링크 권위본)로 라우팅 (DR-0009).
 
     OntologyStore Protocol을 그대로 만족한다(커넥터·서버·anomaly 무변경). `SKAI_STORE` 미설정
     시엔 make_store()가 순수 LocalOntologyStore를 돌려주므로 이 클래스는 opt-in 경로에서만 쓴다.
+
+    라우팅 요약:
+    - **Foundry 소재**(write+read): Aircraft·Observation·Operator·Satellite·OrbitPass·Track·
+      WeatherState·NewsEvent(객체) + FK 링크(observed_as·operated_by·of·Track→AC·Weather→Region·
+      composed_of).
+    - **로컬 소재**: Region·Anomaly + provenance MANY-MANY 링크(evidenced_by·involves·
+      correlated_with·mentions·aggregates·cites) + SituationAssessment 문장 cites.
+    - **dual-write**: SituationAssessment(Foundry 스칼라 스파인 + 로컬 권위본), NewsEvent mentions
+      (Foundry required-param best-effort + 로컬 권위 링크).
 
     foundry는 주입 가능(테스트에서 실 SDK 없이 fake 주입 → 라우팅·provenance 단위검증).
     """
@@ -384,7 +819,7 @@ class HybridStore:
         # foundry 미주입이면 실 어댑터 생성(크리덴셜 필요). 테스트는 fake를 주입한다.
         self.foundry = foundry if foundry is not None else FoundryOntologyStore()
 
-    # ── Foundry 라우팅 (핵심 엔티티) ──────────────
+    # ── write: Foundry 소재 ────────────────────────
     def write_aircraft(self, aircraft: Aircraft) -> None:
         self.foundry.write_aircraft(aircraft)
 
@@ -393,14 +828,78 @@ class HybridStore:
         validate_provenance(obs)
         self.foundry.write_observation(obs)
 
+    def write_operator(self, operator: Operator) -> None:
+        self.foundry.write_operator(operator)
+
+    def write_satellite(self, satellite: Satellite) -> None:
+        self.foundry.write_satellite(satellite)
+
+    def write_orbitpass(self, orbit_pass: OrbitPass) -> None:
+        self.foundry.write_orbitpass(orbit_pass)
+
+    def write_track(self, track: Track) -> None:
+        self.foundry.write_track(track)
+
+    def write_weatherstate(self, weather: WeatherState) -> None:
+        # provenance 백엔드 무관 강제(Foundry 스토어도 재강제).
+        validate_provenance(weather)
+        self.foundry.write_weatherstate(weather)
+
+    def write_newsevent(self, news: NewsEvent, mentions: Sequence[tuple] = ()) -> None:
+        validate_provenance(news)
+        # 객체 → Foundry(mention required-param best-effort). Foundry MANY-MANY 링크는 불안정(§9-4)
+        # 이라, query_mentions가 읽는 **권위 mention 링크는 로컬에 저장**한다.
+        self.foundry.write_newsevent(news, mentions)
+        for dst_type, dst_id in mentions:
+            self.local.link("NewsEvent", news.id, "mentions", dst_type, dst_id)
+
+    def write_assessment(self, assessment: SituationAssessment) -> None:
+        # dual-write: 로컬 = 권위본(문장 cites·aggregates/cites 링크, sentence-cites 검증 강제).
+        #             Foundry = 스칼라 스파인(문장 속성 없음, best-effort). 로컬 실패 시 예외 전파,
+        #             Foundry 실패는 경고만(스파인은 부가). read는 로컬(문장 보존).
+        self.local.write_assessment(assessment)
+        try:
+            self.foundry.write_assessment(assessment)
+        except Exception as e:
+            _warn(f"Foundry write_assessment 스칼라 실패(로컬 권위본은 성공): {e!r}")
+
+    # ── write: 로컬 소재 (명시 — Foundry 미배선) ──────
+    def write_region(self, region: Region) -> None:
+        self.local.write_region(region)
+
+    def write_anomaly(
+        self,
+        anomaly: Anomaly,
+        evidence: Sequence[str],
+        involves: Sequence[str] = (),
+    ) -> None:
+        # write_anomaly는 Foundry 미구현(D-1 미해소) → Anomaly·evidenced_by/involves 링크 통째 로컬.
+        self.local.write_anomaly(anomaly, evidence, involves)
+
+    # ── 링크 ───────────────────────────────────────
     def link(
         self, src_type: str, src_id: str, link_type: str, dst_type: str, dst_id: str
     ) -> None:
         if link_type == "observed_as":
             # observed_as: write_observation의 aircraftIcao24 FK로 자동 형성(§7-2) → no-op.
             return
+        if link_type == "composed_of":
+            # composed_of: Foundry edit-observation.trackId로 형성(P7 §10-5).
+            self.foundry.link(src_type, src_id, link_type, dst_type, dst_id)
+            return
+        # 그 밖(evidenced_by·involves·correlated_with·mentions·aggregates·cites) = 로컬 권위본.
         self.local.link(src_type, src_id, link_type, dst_type, dst_id)
 
+    # ── 정리·전이 ──────────────────────────────────
+    def delete_future_orbitpasses_for(self, satellite_ref: str, now_ts: int) -> int:
+        return self.foundry.delete_future_orbitpasses_for(satellite_ref, now_ts)
+
+    def set_region_alert_level(self, region_id: str, alert_level: str) -> None:
+        # Region 객체는 로컬 권위본이나, alertLevel 전이는 Foundry Modify 액션(set-region-alert-level)
+        # 으로 스파인에 반영(P7 §10-1 D-2). 로컬 Region엔 alertLevel 컬럼이 없어(스키마) Foundry만.
+        return self.foundry.set_region_alert_level(region_id, alert_level)
+
+    # ── read: Foundry 소재 ─────────────────────────
     def query_aircraft(self) -> list[Aircraft]:
         return self.foundry.query_aircraft()
 
@@ -419,13 +918,44 @@ class HybridStore:
     def get_observation(self, obs_id: str) -> Optional[Observation]:
         return self.foundry.get_observation(obs_id)
 
+    def query_operators(self) -> list[Operator]:
+        return self.foundry.query_operators()
+
+    def query_satellites(self) -> list[Satellite]:
+        return self.foundry.query_satellites()
+
+    def satellite_map(self) -> dict[str, Satellite]:
+        return self.foundry.satellite_map()
+
+    def query_orbitpasses(self) -> list[OrbitPass]:
+        return self.foundry.query_orbitpasses()
+
+    def query_tracks(self) -> list[Track]:
+        return self.foundry.query_tracks()
+
+    def query_weather_latest(self) -> list[WeatherState]:
+        return self.foundry.query_weather_latest()
+
+    def query_news(self) -> list[NewsEvent]:
+        return self.foundry.query_news()
+
     def counts(self) -> dict[str, int]:
-        # Aircraft·Observation은 Foundry 카운트, 나머지는 로컬 카운트로 병합(관측 소재 반영).
+        # Foundry 소재 8종은 Foundry 카운트로, 나머지(region·anomaly·assessment·link 등)는 로컬로 병합.
         out = dict(self.local.counts())
         try:
             fc = self.foundry.counts()
-            out["aircraft"] = fc.get("aircraft", out.get("aircraft", 0))
-            out["observation"] = fc.get("observation", out.get("observation", 0))
+            for k in (
+                "aircraft",
+                "observation",
+                "operator",
+                "satellite",
+                "orbitpass",
+                "track",
+                "weatherstate",
+                "newsevent",
+            ):
+                if k in fc:
+                    out[k] = fc[k]
         except Exception as e:  # Foundry 카운트 실패해도 로컬 카운트는 반환
             _warn(f"Foundry counts 실패 → 로컬값 사용: {e!r}")
         return out
@@ -433,7 +963,9 @@ class HybridStore:
     # ── 나머지 전부 로컬 위임 ─────────────────────
     def __getattr__(self, name: str):
         # __init__에서 set된 self.local/self.foundry는 여기 안 온다(정상 속성).
-        # 위에서 명시하지 않은 Protocol 메서드는 전부 LocalOntologyStore로 위임.
+        # 위에서 명시하지 않은 Protocol 메서드(query_regions·query_anomalies·query_mentions·
+        # query_evidence·query_correlations·query_assessments·get_assessment·set_anomaly_status 등)는
+        # 전부 LocalOntologyStore로 위임(문장 cites·provenance 링크 권위본).
         local = self.__dict__.get("local")
         if local is None:
             raise AttributeError(name)
@@ -443,7 +975,7 @@ class HybridStore:
 def make_store(db_path: str = DEFAULT_DB):
     """SKAI_STORE 환경변수로 스토어 선택. 기본(미설정)은 LocalOntologyStore.
 
-    - SKAI_STORE=foundry → HybridStore(Aircraft·Observation·observed_as=Foundry, 나머지=로컬).
+    - SKAI_STORE=foundry → HybridStore(정보 소재 Foundry+Local 라우팅).
     - 그 외/미설정      → LocalOntologyStore(순수 로컬, 데모 재현성 보존).
 
     커넥터·서버가 LocalOntologyStore(db_path) 대신 이걸 호출하면 SKAI_STORE로 백엔드가 갈린다.

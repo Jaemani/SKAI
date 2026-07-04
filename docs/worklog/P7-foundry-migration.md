@@ -539,6 +539,67 @@ create-news-event.`newsEvents`·create-situation-assessment.`situationAssessment
 
 ---
 
+## 11. store_foundry 전량 확장 (2026-07-04, opus 서브에이전트)
+
+§10-7 B목록("지금 배선 가능")을 `store_foundry.py`에 집행. 저수준 `foundry_sdk` 1.97.0 라이브 왕복으로 검증. **판정: [EXTEND-OK]** — write 7종·composed_of·set-alert·delete-orbit-pass 전부 통과, Foundry 순증 0(KADIZ Region은 데모 자산으로 유지).
+
+**검증 산출물**: `scripts/p7_extend_validate.py`(신규, HybridStore write → Foundry read-back·traverse → delete). 파라미터 형태는 `scripts/p7_full_introspect.py` 재실행 실측으로 그라운딩(37 액션 required 플래그 전수).
+
+### 11-1. 라우팅 설계 (스키마 결함이 강제한 3분류)
+
+Foundry Object의 **속성 부분집합**이 model 필드를 잃는 곳이 있어(실측), 정보 소재를 3가지로 나눴다:
+
+| 소재 | 타입 | write | read | 근거 |
+|---|---|---|---|---|
+| **Foundry**(write+read) | Aircraft·Observation·Operator·Satellite·OrbitPass·Track·WeatherState·NewsEvent | Foundry create 액션 | 저수준 SDK dict→dataclass | Foundry가 충실히 보관(경미한 손실은 복원/폴백) |
+| **로컬**(권위본) | Region·Anomaly + provenance MANY-MANY 링크(evidenced_by·involves·correlated_with·mentions·aggregates·cites) + SituationAssessment **문장 cites** | 로컬 | 로컬 | write_anomaly Foundry 미구현(D-1), Foundry MANY-MANY 불안정(§9-4) |
+| **dual-write** | SituationAssessment(스칼라)·NewsEvent(mentions) | Foundry 스칼라 + 로컬 문장/링크 | 로컬(문장 보존) | Foundry SituationAssessment에 sentences 속성 없음(§9-2) → 문장은 로컬만 |
+
+**필드 손실(문서화, 코드로 못 고침 — 스키마 갭):**
+- **WeatherState.station 속성 없음** → `weatherId`(f"wx-{station}-{ts}") PK에서 복원(`_station_from_weather_id`). model의 wind_dir/wind_speed는 Foundry `wind` 단일 문자열("200/8")로 합성/역파싱.
+- **OrbitPass.ground_track 속성 없음** → read 시 빈 리스트(지도 궤적 레이어 폴백 필요). ceilingFt None(무제한)은 sentinel 99999로 왕복.
+- **SituationAssessment sentences 없음** → dual-write로 로컬이 문장 cites 권위본.
+- Observation.attrs(§5) 잔존.
+
+### 11-2. write 7종 라이브 왕복 (`p7_extend_validate.py`, 항목당 1건·끝에 delete)
+
+| write | 결과 | traverse/확인 |
+|---|---|---|
+| write_operator | **OK** | operatorId=요청값 PK, kind read-back |
+| write_satellite | **OK** | noradId=요청값 PK(UUID 아님) + 같은 PK 재호출 dedup 불변 |
+| write_orbitpass | **OK** | `of`: OrbitPass.satellite → [sat] ✓. `over`: **미형성**(§10-3 잔존, NotFound — 예상) |
+| write_track | **OK** | Track.aircraft → [aircraft] ✓ (FK) |
+| write_weatherstate | **OK** | WeatherState.region → [KADIZ] ✓. conditions←flight_category("MVFR"), wind="200/8" 합성 |
+| write_newsevent | **OK** | 객체 Foundry(url←source_url, confidence 0.9→**0.4 clamp**). mention 링크는 **로컬 권위본**(query_mentions 로컬) |
+| write_assessment | **OK** | Foundry 스칼라 assessmentId ✓ + **로컬 문장 cites 보존** ✓ (dual-write) |
+
+**링크·정리·전이:**
+- **composed_of**: `edit-observation.trackId`로 형성 → Observation.track → [track] / Track.observations → [obs] **양방향 ✓** (custody 확정 후 edit 경로, §10-5).
+- **observed_as**: write_observation.aircraftIcao24 FK로 자동 → Observation.aircraft → [aircraft] ✓.
+- **set_region_alert_level**: 임시 Region alertLevel None→**RED** ✓, Region count 불변(팬텀 없음). 저수준 SDK(OSDK 0.5.0 누락 회피).
+- **delete_future_orbitpasses_for**: 미래 통과창 1건 delete-orbit-pass로 삭제 ✓ (재계산 정리 배선).
+
+**write_anomaly는 미구현 유지**(D-1 미해소: create-anomaly ApplyActionFailed·half-Anomaly·evidenced_by 불안정, 범인=required objectSet `newParameter1`). 주석에 §10 근거 갱신.
+
+### 11-3. 단위 테스트 + 회귀
+
+- `tests/test_foundry_store.py`: 파라미터 매핑(6 write × PK/FK/clamp/provenance)·라우팅(Foundry vs 로컬)·dedup·ObjectAlreadyExists skip·composed_of edit·set-alert·delete-pass·counts 병합 등 **신규 ~30건 추가**. FakeFoundry에 7타입 write/read + set-alert + delete-pass 확장.
+- 구 `test_write_track_and_anomaly_route_to_local`은 **write_track이 이제 Foundry 소재**라 2개로 분할(track→Foundry / anomaly→로컬).
+- **전체 pytest: 165 passed, 2 skipped**(라이브 skip). 회귀 0.
+
+### 11-4. Foundry 상태 (검증 후)
+
+정리 완료 — 순증 0. 현 카운트: **Aircraft 6·Observation 3**(§8 이전 세션 잔존 baseline) + **Region 1(KADIZ, 데모 자산 유지)**, 나머지 0. `p7_extend_validate.py`는 임시 로컬 db(`/private/tmp/...`)를 써 실 `skai.db` 미오염.
+
+### 11-5. 남은 코드측 갭 (UI 선행조건 대기)
+
+1. **write_anomaly** — D-1(create-anomaly ApplyActionFailed) UI 해소 후 배선. 현재 로컬 권위본.
+2. **over(OrbitPass→Region)·within(Observation→Region)** — 링크 미형성/채움불가(§10-3). 지역 traverse는 regionId 속성값으로만 가능(그래프 조인 불가).
+3. **Foundry-primary read의 필드 손실**(station 복원·ground_track 폴백·assessment 문장 로컬) — 스키마에 속성 추가되면 dual/폴백 제거 가능.
+4. SituationAssessment·NewsEvent mentions는 dual/asymmetric — Foundry MANY-MANY·문장 속성이 정상화되면 단일화.
+
+---
+
 ## 12. D-1 최종 재검증 (2026-07-04, opus 서브에이전트)
 
 사용자가 D-1 수정(create-anomaly의 `newParameter1` 제거) + OSDK 재발행(0.5.0→**0.6.0**)을 마쳤다고 하여 **최종 실측 재검증**. 저수준 `foundry_sdk` 1.97.0 라이브 introspection + create-anomaly EXECUTE 왕복(3회 반복 + 3변형 진단, 매건 delete 정리). **Foundry 오염 0** (모든 iteration delta 0, 최종 카운트 Aircraft 6·Observation 3·Anomaly 0·Region 0 = 세션 baseline).

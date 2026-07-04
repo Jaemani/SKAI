@@ -25,7 +25,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ontology.model import KADIZ_REGION, Aircraft, Anomaly, Observation, Track
+from ontology.model import (
+    KADIZ_REGION,
+    Aircraft,
+    Anomaly,
+    NewsEvent,
+    Observation,
+    Operator,
+    OrbitPass,
+    Satellite,
+    Track,
+    WeatherState,
+)
 from ontology.store import ProvenanceError
 from ontology.store_foundry import HybridStore, make_store
 from ontology.store_local import LocalOntologyStore
@@ -38,6 +49,16 @@ class FakeFoundry:
         self.aircraft: list[Aircraft] = []
         self.obs: list[Observation] = []
         self.links: list[tuple] = []
+        # P7 §11 확장 소재
+        self.operators: list[Operator] = []
+        self.satellites: list[Satellite] = []
+        self.orbitpasses: list[OrbitPass] = []
+        self.tracks: list[Track] = []
+        self.weather: list[WeatherState] = []
+        self.news: list[tuple] = []  # (NewsEvent, mentions)
+        self.assessments: list = []
+        self.alerts: list[tuple] = []  # (region_id, level)
+        self.deleted_passes: list[tuple] = []  # (satellite_ref, now_ts)
 
     def write_aircraft(self, a: Aircraft) -> None:
         self.calls.append(("write_aircraft", a.icao24))
@@ -46,6 +67,43 @@ class FakeFoundry:
     def write_observation(self, o: Observation) -> None:
         self.calls.append(("write_observation", o.id))
         self.obs.append(o)
+
+    def write_operator(self, op: Operator) -> None:
+        self.calls.append(("write_operator", op.id))
+        self.operators.append(op)
+
+    def write_satellite(self, s: Satellite) -> None:
+        self.calls.append(("write_satellite", s.norad_id))
+        self.satellites.append(s)
+
+    def write_orbitpass(self, p: OrbitPass) -> None:
+        self.calls.append(("write_orbitpass", p.id))
+        self.orbitpasses.append(p)
+
+    def write_track(self, t: Track) -> None:
+        self.calls.append(("write_track", t.id))
+        self.tracks.append(t)
+
+    def write_weatherstate(self, w: WeatherState) -> None:
+        self.calls.append(("write_weatherstate", w.id))
+        self.weather.append(w)
+
+    def write_newsevent(self, n: NewsEvent, mentions=()) -> None:
+        self.calls.append(("write_newsevent", n.id))
+        self.news.append((n, tuple(mentions)))
+
+    def write_assessment(self, a) -> None:
+        self.calls.append(("write_assessment", a.id))
+        self.assessments.append(a)
+
+    def set_region_alert_level(self, region_id, level) -> None:
+        self.calls.append(("set_region_alert_level", region_id))
+        self.alerts.append((region_id, level))
+
+    def delete_future_orbitpasses_for(self, satellite_ref, now_ts) -> int:
+        self.calls.append(("delete_future_orbitpasses_for", satellite_ref))
+        self.deleted_passes.append((satellite_ref, now_ts))
+        return 0
 
     def link(self, src_type, src_id, link_type, dst_type, dst_id) -> None:
         self.calls.append(("link", link_type))
@@ -69,8 +127,38 @@ class FakeFoundry:
     def get_observation(self, obs_id):
         return next((o for o in self.obs if o.id == obs_id), None)
 
+    def query_operators(self):
+        return list(self.operators)
+
+    def query_satellites(self):
+        return list(self.satellites)
+
+    def satellite_map(self):
+        return {s.norad_id: s for s in self.satellites}
+
+    def query_orbitpasses(self):
+        return list(self.orbitpasses)
+
+    def query_tracks(self):
+        return list(self.tracks)
+
+    def query_weather_latest(self):
+        return list(self.weather)
+
+    def query_news(self):
+        return [n for n, _ in self.news]
+
     def counts(self):
-        return {"aircraft": len(self.aircraft), "observation": len(self.obs)}
+        return {
+            "aircraft": len(self.aircraft),
+            "observation": len(self.obs),
+            "operator": len(self.operators),
+            "satellite": len(self.satellites),
+            "orbitpass": len(self.orbitpasses),
+            "track": len(self.tracks),
+            "weatherstate": len(self.weather),
+            "newsevent": len(self.news),
+        }
 
 
 def _valid_obs(icao24="abc123", ts=1_700_000_000) -> Observation:
@@ -137,24 +225,28 @@ def test_write_region_routes_to_local(hybrid):
     assert not fake.calls  # Foundry 미접촉
 
 
-def test_write_track_and_anomaly_route_to_local(hybrid):
+def test_write_track_routes_to_foundry(hybrid):
+    """P7 §11: write_track은 Foundry 소재로 라우팅(구 로컬 → Foundry)."""
     store, fake = hybrid
-    store.write_track(
-        Track(
-            id="track-abc",
-            aircraft_ref="abc123",
-            start_ts=1,
-            end_ts=2,
-            path=[[36, 124]],
-        )
+    track = Track(
+        id="track-abc", aircraft_ref="abc123", start_ts=1, end_ts=2, path=[[36, 124]]
     )
+    store.write_track(track)
+    assert [c for c in fake.calls if c[0] == "write_track"]
+    assert [t.id for t in fake.tracks] == ["track-abc"]
+    # 로컬 track 테이블엔 안 들어감(Foundry 소재)
+    assert store.local.query_tracks() == []
+
+
+def test_write_anomaly_routes_to_local(hybrid):
+    """write_anomaly는 Foundry 미구현(D-1 미해소) → 로컬 권위본."""
+    store, fake = hybrid
     anomaly = Anomaly(
         id="anomaly-1", type="emergency_squawk", ts=1_700_000_000, confidence=0.9
     )
     store.write_anomaly(anomaly, evidence=["abc123-1700000000"])
-    assert [t.id for t in store.local.query_tracks()] == ["track-abc"]
     assert [a.id for a in store.local.query_anomalies()] == ["anomaly-1"]
-    assert not fake.calls
+    assert not fake.calls  # Foundry 미접촉
 
 
 # ── read 라우팅 ──────────────────────────────────────────────────────────────
@@ -364,6 +456,382 @@ def test_foundry_link_observed_as_noop():
 
     store.link("Aircraft", "abc123", "observed_as", "Observation", "obs-1")
     assert not apply_calls  # _apply 미호출
+
+
+# ── P7 §11: 신규 7타입 write 파라미터 매핑 (mock _pf) ────────────────────────
+def _capture_store():
+    """FoundryOntologyStore + _apply 캡처 리스트 반환."""
+    store, _ = _make_foundry_store_with_mock()
+    calls: list[dict] = []
+    store._apply = lambda action, params: (
+        calls.append({"action": action, "params": dict(params)}) or None
+    )
+    return store, calls
+
+
+def test_write_operator_params():
+    """create-operator: newParameter=operatorId(PK), name/kind/country 매핑."""
+    store, calls = _capture_store()
+    store.write_operator(Operator(id="op-1", name="KAF", kind="airforce", country="KR"))
+    p = calls[0]["params"]
+    assert calls[0]["action"] == "create-operator"
+    assert p["newParameter"] == "op-1"
+    assert (p["name"], p["kind"], p["country"]) == ("KAF", "airforce", "KR")
+
+
+def test_write_operator_none_country_placeholder():
+    """country는 required(Foundry) — model None이면 placeholder로 채움."""
+    store, calls = _capture_store()
+    store.write_operator(Operator(id="op-2", name="X", kind="airline", country=None))
+    assert calls[0]["params"]["country"] == "unknown"
+
+
+def test_write_satellite_params():
+    """create-satellite: newParameter=noradId(PK), objectType/operatorRef/tleEpoch 매핑."""
+    store, calls = _capture_store()
+    store.write_satellite(
+        Satellite(
+            norad_id="25544",
+            name="ISS",
+            operator_ref="NASA",
+            object_type="PAYLOAD",
+            tle_epoch="2026-07-04T00:00:00+00:00",
+        )
+    )
+    p = calls[0]["params"]
+    assert calls[0]["action"] == "create-satellite"
+    assert p["newParameter"] == "25544"
+    assert p["objectType"] == "PAYLOAD"
+    assert p["operatorRef"] == "NASA"
+    assert p["tleEpoch"] == "2026-07-04T00:00:00+00:00"
+
+
+def test_write_satellite_none_tle_epoch_fallback():
+    """tleEpoch required — None이면 현재시각 ISO로 대체(빈값 금지)."""
+    store, calls = _capture_store()
+    store.write_satellite(Satellite(norad_id="1", name="s", tle_epoch=None))
+    assert calls[0]["params"]["tleEpoch"]  # 비어있지 않음
+
+
+def test_write_orbitpass_fk_params():
+    """create-orbit-pass: satelliteNoradId(FK→of)·regionId·ts 매핑, PK 바인딩."""
+    store, calls = _capture_store()
+    store.write_orbitpass(
+        OrbitPass(
+            id="pass-25544-100",
+            satellite_ref="25544",
+            region_ref="KADIZ",
+            start_ts=100,
+            end_ts=200,
+            max_elevation=45.0,
+        )
+    )
+    p = calls[0]["params"]
+    assert calls[0]["action"] == "create-orbit-pass"
+    assert p["newParameter"] == "pass-25544-100"
+    assert p["satelliteNoradId"] == "25544"  # FK → OrbitPass.satellite(of)
+    assert p["regionId"] == "KADIZ"
+    assert p["maxElevation"] == 45.0
+    assert p["startTs"].startswith("1970")  # unix 100 → ISO
+
+
+def test_write_track_params():
+    """create-track: aircraftIcao24(FK→Track.aircraft)·pathJson·hasGap 매핑, PK 바인딩."""
+    store, calls = _capture_store()
+    store.write_track(
+        Track(
+            id="track-abc",
+            aircraft_ref="abc123",
+            start_ts=1,
+            end_ts=2,
+            path=[[36.0, 124.0]],
+            has_gap=True,
+        )
+    )
+    p = calls[0]["params"]
+    assert calls[0]["action"] == "create-track"
+    assert p["newParameter"] == "track-abc"
+    assert p["aircraftIcao24"] == "abc123"  # FK → Track.aircraft
+    assert p["hasGap"] is True
+    assert p["pathJson"] == "[[36.0, 124.0]]"
+
+
+def test_write_weatherstate_params():
+    """create-weather-state: regionId(FK)·wind 합성·conditions←flight_category·rawText←conditions."""
+    store, calls = _capture_store()
+    ws = WeatherState(
+        id="wx-RKSI-100",
+        region_ref="KADIZ",
+        ts=100,
+        station="RKSI",
+        wind_dir=200,
+        wind_speed_kt=8,
+        visibility_sm=6.0,
+        ceiling_ft=3000,
+        flight_category="MVFR",
+        conditions="METAR RKSI 200208KT",
+        source="aviationweather",
+        source_url="https://aviationweather.gov/metar",
+    )
+    store.write_weatherstate(ws)
+    p = calls[0]["params"]
+    assert calls[0]["action"] == "create-weather-state"
+    assert p["newParameter"] == "wx-RKSI-100"
+    assert p["regionId"] == "KADIZ"  # FK → WeatherState.region
+    assert p["wind"] == "200/8"  # dir/speed 합성
+    assert p["visibilitySm"] == 6.0
+    assert p["ceilingFt"] == 3000.0
+    assert p["conditions"] == "MVFR"  # ← flight_category
+    assert p["rawText"] == "METAR RKSI 200208KT"  # ← model.conditions(원문)
+
+
+def test_write_weatherstate_none_ceiling_sentinel():
+    """ceiling_ft None(무제한) → required double라 sentinel(99999)로 표기(왜곡 최소화)."""
+    store, calls = _capture_store()
+    ws = WeatherState(
+        id="wx-RKSI-1",
+        region_ref="KADIZ",
+        ts=100,
+        station="RKSI",
+        ceiling_ft=None,
+        source="aw",
+        source_url="https://x",
+    )
+    store.write_weatherstate(ws)
+    assert calls[0]["params"]["ceilingFt"] == 99999.0
+
+
+def test_write_weatherstate_provenance_missing_rejected():
+    """provenance(source/source_url/ts) 누락 weather는 write 거부(백엔드 무관)."""
+    store, calls = _capture_store()
+    ws = WeatherState(id="wx-x-1", region_ref="KADIZ", ts=0, station="X")  # ts=0
+    with pytest.raises(ProvenanceError):
+        store.write_weatherstate(ws)
+    assert not calls  # _apply 미도달
+
+
+def test_write_newsevent_params_and_clamp():
+    """create-news-event: url←source_url, confidence 상한 clamp, mentions→object 파라미터."""
+    store, calls = _capture_store()
+    news = NewsEvent(
+        id="news-x",
+        source="gdelt",
+        source_url="https://a.example/story",
+        ts=100,
+        title="t",
+        summary="s",
+        confidence=0.9,  # → 0.4로 clamp
+        entities=["KADIZ"],
+    )
+    store.write_newsevent(news, mentions=[("Region", "KADIZ")])
+    p = calls[0]["params"]
+    assert calls[0]["action"] == "create-news-event"
+    assert p["newParameter"] == "news-x"
+    assert p["url"] == "https://a.example/story"  # Foundry url = source_url
+    assert p["confidence"] == 0.4  # NEWS_MAX_CONFIDENCE clamp
+    assert p["regions"] == "KADIZ"  # mention → regions 파라미터
+    assert p["aircraft"] == "none" and p["operators"] == "none"  # 없으면 placeholder
+    assert p["entitiesJson"] == '["KADIZ"]'
+
+
+def test_write_satellite_dedup_no_double_call():
+    """같은 noradId 두 번 write → 두 번째는 _apply 호출 없음(프로세스 내 dedup)."""
+    store, _ = _make_foundry_store_with_mock()
+    calls: list = []
+    store._apply = lambda action, params: calls.append(action) or None
+    sat = Satellite(norad_id="25544", name="ISS")
+    store.write_satellite(sat)
+    store.write_satellite(sat)
+    assert calls == ["create-satellite"]
+
+
+def test_write_satellite_already_exists_no_crash():
+    """ObjectAlreadyExists(크로스런) → 크래시 없이 skip + dedup 마킹."""
+    store, _ = _make_foundry_store_with_mock()
+
+    def raise_exists(action, params):
+        raise type("ObjectAlreadyExistsError", (Exception,), {})("already exists")
+
+    store._apply = raise_exists
+    store.write_satellite(Satellite(norad_id="25544", name="ISS"))  # 크래시 없어야
+    assert "25544" in store._written_other.get("Satellite", set())
+
+
+def test_foundry_link_composed_of_edits_observation():
+    """link(composed_of) → edit-observation으로 기존 Observation.trackId 세팅."""
+    store, _ = _make_foundry_store_with_mock()
+    # _get_object가 기존 Observation dict를 반환하도록 mock
+    store._get_object = lambda ot, pk: {
+        "obsId": pk,
+        "lat": 36.0,
+        "lon": 124.0,
+        "onGround": False,
+        "source": "opensky",
+        "sourceUrl": "https://x",
+        "ts": "2023-11-14T22:13:20+00:00",
+    }
+    calls: list[dict] = []
+    store._apply = lambda action, params: (
+        calls.append({"action": action, "params": dict(params)}) or None
+    )
+    store.link("Track", "track-1", "composed_of", "Observation", "abc123-100")
+    assert calls[0]["action"] == "edit-observation"
+    p = calls[0]["params"]
+    assert p["Observation"] == "abc123-100"
+    assert p["trackId"] == "track-1"  # composed_of FK
+    assert p["newParameter"] == "abc123-100"  # obsId PK
+
+
+# ── P7 §11: HybridStore 라우팅 (신규 7타입 + 링크 + 정리·전이) ────────────────
+def _valid_ws() -> WeatherState:
+    return WeatherState(
+        id="wx-RKSI-100",
+        region_ref="KADIZ",
+        ts=1_700_000_000,
+        station="RKSI",
+        source="aviationweather",
+        source_url="https://aviationweather.gov/metar",
+    )
+
+
+def _valid_news() -> NewsEvent:
+    return NewsEvent(
+        id="news-1",
+        source="gdelt",
+        source_url="https://a.example/x",
+        ts=1_700_000_000,
+        title="t",
+    )
+
+
+def test_write_operator_satellite_orbitpass_route_to_foundry(hybrid):
+    store, fake = hybrid
+    store.write_operator(Operator(id="op-1", name="KAF", kind="airforce"))
+    store.write_satellite(Satellite(norad_id="25544", name="ISS"))
+    store.write_orbitpass(
+        OrbitPass(
+            id="p-1",
+            satellite_ref="25544",
+            region_ref="KADIZ",
+            start_ts=1,
+            end_ts=2,
+            max_elevation=10.0,
+        )
+    )
+    assert [o.id for o in fake.operators] == ["op-1"]
+    assert [s.norad_id for s in fake.satellites] == ["25544"]
+    assert [p.id for p in fake.orbitpasses] == ["p-1"]
+    # 로컬 미접촉(Foundry 소재)
+    assert store.local.query_operators() == []
+    assert store.local.query_satellites() == []
+
+
+def test_write_weatherstate_routes_to_foundry(hybrid):
+    store, fake = hybrid
+    store.write_weatherstate(_valid_ws())
+    assert [w.id for w in fake.weather] == ["wx-RKSI-100"]
+    assert store.local.query_weather_latest() == []
+
+
+def test_write_weatherstate_provenance_rejected_before_foundry(hybrid):
+    store, fake = hybrid
+    bad = _valid_ws()
+    bad.source = ""
+    with pytest.raises(ProvenanceError):
+        store.write_weatherstate(bad)
+    assert not fake.weather
+
+
+def test_write_newsevent_object_foundry_mentions_local(hybrid):
+    """news 객체 → Foundry, mention 링크 → 로컬 권위본(query_mentions는 로컬)."""
+    store, fake = hybrid
+    store.write_newsevent(_valid_news(), mentions=[("Region", "KADIZ")])
+    assert [n.id for n, _ in fake.news] == ["news-1"]
+    # 권위 mention 링크는 로컬에서 읽힌다
+    assert {"type": "Region", "id": "KADIZ"} in store.local.query_mentions("news-1")
+
+
+def test_write_newsevent_provenance_rejected(hybrid):
+    store, fake = hybrid
+    bad = _valid_news()
+    bad.ts = 0
+    with pytest.raises(ProvenanceError):
+        store.write_newsevent(bad)
+    assert not fake.news
+
+
+def test_write_assessment_dual_write(hybrid):
+    """assessment: 로컬 권위본(문장 cites) + Foundry 스칼라 스파인 dual-write."""
+    from ontology.model import AssessmentSentence, SituationAssessment
+
+    store, fake = hybrid
+    assessment = SituationAssessment(
+        id="assess-KADIZ-1",
+        region_ref="KADIZ",
+        window_start=1,
+        window_end=2,
+        query="q",
+        summary="headline",
+        sentences=[
+            AssessmentSentence(text="근거 문장", cites=["abc123-100"], confidence=0.9)
+        ],
+        confidence=0.8,
+        produced_by="template",
+        created_at=100,
+    )
+    store.write_assessment(assessment)
+    # 로컬 권위본(문장 보존)
+    assert [a.id for a in store.local.query_assessments()] == ["assess-KADIZ-1"]
+    assert store.local.get_assessment("assess-KADIZ-1").sentences[0].cites == [
+        "abc123-100"
+    ]
+    # Foundry 스칼라 스파인
+    assert [a.id for a in fake.assessments] == ["assess-KADIZ-1"]
+
+
+def test_composed_of_link_routes_to_foundry(hybrid):
+    store, fake = hybrid
+    store.link("Track", "track-1", "composed_of", "Observation", "abc123-100")
+    assert (
+        "Track",
+        "track-1",
+        "composed_of",
+        "Observation",
+        "abc123-100",
+    ) in fake.links
+
+
+def test_set_region_alert_level_routes_to_foundry(hybrid):
+    store, fake = hybrid
+    store.set_region_alert_level("KADIZ", "RED")
+    assert ("KADIZ", "RED") in fake.alerts
+
+
+def test_delete_future_orbitpasses_routes_to_foundry(hybrid):
+    store, fake = hybrid
+    store.delete_future_orbitpasses_for("25544", 1_700_000_000)
+    assert ("25544", 1_700_000_000) in fake.deleted_passes
+
+
+def test_read_p3_objects_route_to_foundry(hybrid):
+    """query_satellites/orbitpasses/weather/news/operators/tracks → Foundry 소재."""
+    store, fake = hybrid
+    store.write_satellite(Satellite(norad_id="25544", name="ISS"))
+    store.write_weatherstate(_valid_ws())
+    store.write_newsevent(_valid_news())
+    assert [s.norad_id for s in store.query_satellites()] == ["25544"]
+    assert set(store.satellite_map().keys()) == {"25544"}
+    assert [w.id for w in store.query_weather_latest()] == ["wx-RKSI-100"]
+    assert [n.id for n in store.query_news()] == ["news-1"]
+
+
+def test_counts_merges_p3_foundry_counts(hybrid):
+    store, fake = hybrid
+    store.write_region(KADIZ_REGION)  # 로컬
+    store.write_satellite(Satellite(norad_id="25544", name="ISS"))  # Foundry
+    counts = store.counts()
+    assert counts["satellite"] == 1  # Foundry 카운트
+    assert counts["region"] == 1  # 로컬 카운트
 
 
 # ── 라이브 통합 (토큰 + foundry_sdk 있을 때만) ──────────────────────────────
