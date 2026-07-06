@@ -61,8 +61,11 @@ def gap_threshold_seconds() -> int:
     return max(GAP_THRESHOLD_SECONDS, DROPOUT_POLL_MULTIPLIER * poll)
 
 
-# Anomaly 상태 (ontology.md §1). candidate=룰 후보, confirmed/dismissed=사람 승인.
-ANOMALY_STATUSES = ("candidate", "confirmed", "dismissed")
+# Anomaly 상태 (ontology.md §1). candidate=룰 후보, confirmed/dismissed=사람 승인,
+# resolved=반증 증거 기반 자동 해소(복귀 관측으로 침묵이 끝남 — actions.scan_and_resolve).
+# resolved는 사람 결정(confirmed/dismissed)과 달리 폴러가 자동 전이하며, 근거 없는 상태 전이
+# 금지 원칙의 연장으로 복귀 관측을 evidenced_by 링크로 남긴다(store.resolve_anomaly).
+ANOMALY_STATUSES = ("candidate", "confirmed", "dismissed", "resolved")
 
 # Anomaly dedup 시간창(초): 같은 (기체, 유형)은 이 창 안에서 1개만 생성.
 # 비상 스쿽은 수 분간 지속되며 매 사이클 같은 관측이 재등장 → 중복 Anomaly 방지.

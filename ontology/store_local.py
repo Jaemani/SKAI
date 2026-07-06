@@ -698,6 +698,42 @@ class LocalOntologyStore:
         assert got is not None  # 방금 UPDATE 성공 → 반드시 존재
         return got
 
+    def resolve_anomaly(
+        self, anomaly_id: str, obs_id: str, resolved_at: int
+    ) -> Anomaly:
+        """반증 증거 기반 자동 해소 — status→resolved + attrs.resolution + 복귀 관측 evidenced_by.
+
+        actions.scan_and_resolve가 status=candidate인 adsb_dropout에 대해서만 호출한다(사람 결정
+        confirmed/dismissed는 건드리지 않음 — 호출측 필터). 근거 없는 상태 전이 금지 원칙의 연장:
+        복귀 관측(obs_id)을 evidenced_by 링크로도 남겨 "왜 해소됐나"를 온톨로지에서 역추적 가능하게
+        한다(반증 증거의 provenance). resolution dict = 프론트 에이전트와 공유되는 고정 계약.
+        없으면 KeyError.
+        """
+        a = self.get_anomaly(anomaly_id)
+        if a is None:
+            raise KeyError(f"Anomaly 없음: id={anomaly_id!r}")
+        a.attrs["resolution"] = {
+            "kind": "return_observed",
+            "obs_id": obs_id,
+            "resolved_at": int(resolved_at),
+        }
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE anomaly SET status = ?, attrs_json = ? WHERE id = ?",
+                ("resolved", json.dumps(a.attrs, ensure_ascii=False), anomaly_id),
+            )
+            # Anomaly —evidenced_by→ 복귀 Observation (반증 증거의 provenance). 멱등(OR IGNORE) —
+            # 탐지 시 근거(침묵 시작 관측)에 복귀 관측을 **추가**한다(대체 아님, 다중 근거 보존).
+            conn.execute(
+                "INSERT OR IGNORE INTO link "
+                "(src_type, src_id, link_type, dst_type, dst_id) "
+                "VALUES (?, ?, ?, ?, ?)",
+                ("Anomaly", anomaly_id, "evidenced_by", "Observation", obs_id),
+            )
+        got = self.get_anomaly(anomaly_id)
+        assert got is not None  # 방금 UPDATE 성공 → 반드시 존재
+        return got
+
     # ── B2 staged human review (방법 B) ──────────────
     # Anomaly에 proposed_explanation·review_status는 별도 컬럼 없이 attrs(JSON)에 미러한다
     # (스키마 마이그레이션 회피). 본 explanation 컬럼은 approve 전까지 불변 = 스테이징의 핵심.

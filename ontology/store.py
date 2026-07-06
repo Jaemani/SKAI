@@ -192,6 +192,16 @@ class OntologyStore(Protocol):
     def query_anomalies(self) -> list[Anomaly]: ...
     def get_anomaly(self, anomaly_id: str) -> Optional[Anomaly]: ...
     def set_anomaly_status(self, anomaly_id: str, status: str) -> Anomaly: ...
+    def resolve_anomaly(
+        self, anomaly_id: str, obs_id: str, resolved_at: int
+    ) -> Anomaly:
+        """반증 증거 기반 자동 해소 — status→resolved + attrs.resolution + 복귀 관측 evidenced_by.
+
+        폴러(actions.scan_and_resolve)가 status=candidate인 adsb_dropout에만 호출한다.
+        복귀 관측(obs_id)을 evidenced_by 링크로도 남긴다(근거 없는 상태 전이 금지의 연장).
+        """
+        ...
+
     # B2 staged human review (방법 B) — AIP 산출 explanation 제안→승인 2단계 분리.
     def propose_explanation(
         self, anomaly_id: str, explanation: str, review_status: str = "pending"

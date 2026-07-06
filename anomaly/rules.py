@@ -17,7 +17,13 @@ from anomaly.crosscheck import CrossCheckSource, NullCrossCheckSource
 from anomaly.isr_satellites import is_signal_promotable_pass
 from anomaly.mil_enrich import MilEnrichmentSource, NullMilEnrichment
 from anomaly.military_db import classify_military
-from ontology.geo import haversine_km, path_length_km, region_of_point
+from ontology.geo import (
+    haversine_km,
+    heading_exits_bbox,
+    path_length_km,
+    region_of_point,
+    union_bbox,
+)
 from ontology.model import (
     ANOMALY_WINDOW_SECONDS,
     SENSITIVE_CLASSIFICATIONS,
@@ -113,6 +119,16 @@ DROPOUT_ACTIVE_WINDOW_SECONDS = 30 * 60
 # 착륙 억제(보너스): 마지막 관측이 저고도(<이 값, m)면 착륙 추정 → 신뢰도 하향(지상 접촉은 전면 억제).
 DROPOUT_LANDING_ALT_M = 1000.0
 DROPOUT_LANDING_CONFIDENCE = 0.3  # 착륙 추정 시 상한(단정 금지 — 정황도 아래로)
+# 경계이탈(커버리지 이탈) 억제: 마지막 관측이 관심영역(민감구역 union = 폴러 fetch bbox = 실질
+# 커버리지) 경계에서 이 마진(도) 이내 AND 기수가 바깥을 향하면, 표적 소실이 아니라 관측 커버리지를
+# 벗어난 것으로 보고 후보를 **전면 억제**한다(on_ground·mirror-present 전면 억제와 같은 계열 —
+# 무인 운영에서 benign dropout 무한 누적의 원천 차단). 하향(conf↓)이 아니라 억제인 이유: 저신뢰
+# 후보도 닫으려면 사람 클릭이 필요해 누적을 못 막음(경계이탈은 명확한 benign 원인이라 생성 자체를
+# 막는 게 정합적). 우리가 틀려 실제로 복귀하면 scan_and_resolve가 뒤늦게가 아니라 애초에 후보가
+# 없으므로 무영향 — 되레 재침묵 시 새 이벤트로 정상 발화. 마진 근거: 제트 순항(~250 m/s)이 침묵
+# 임계(gap_threshold, 60s 폴 시 ~180s) 동안 이동하는 거리 ~45km ≈ 0.4°를 커버 — 이 안에서 바깥으로
+# 향하면 침묵 중 실제로 경계를 넘었을 개연성이 높다. 0.5°는 그보다 약간 넉넉(보수적으로 억제 폭 제한).
+DROPOUT_EDGE_MARGIN_DEG = 0.5
 # 로이터링: 지속 ≥ 임계 AND 변위/경로 비율 낮음(원형·반복). 경로가 너무 짧으면 판정 유보.
 LOITERING_MIN_SECONDS = 10 * 60  # 지속 임계(기본 10분)
 LOITERING_MIN_PATH_KM = 15.0  # 경로 최소 길이(짧으면 정지·노이즈 → 유보)
@@ -205,6 +221,8 @@ def detect_adsb_dropout(
     """
     crosscheck = crosscheck or NullCrossCheckSource()
     silence_threshold = gap_threshold_seconds()
+    # 관심영역(민감구역 union) = 실질 커버리지 경계. 루프 밖에서 1회 계산(경계이탈 억제용).
+    coverage_bbox = union_bbox(sensitive_regions)
     out: list[AnomalyDraft] = []
     for track in tracks:
         last = latest_obs_by_ac.get(track.aircraft_ref)
@@ -222,6 +240,12 @@ def detect_adsb_dropout(
             continue
         # 착륙 억제 — 지상 접촉은 dropout 아님(착륙·택싱). 저고도는 아래서 신뢰도만 하향.
         if last.on_ground:
+            continue
+        # 경계이탈 억제 — 관심영역(민감구역 union = 커버리지) 가장자리에서 바깥으로 향하는 침묵은
+        # 표적 소실이 아니라 커버리지 이탈(benign). heading None이면 판정 못 함 → 억제 안 함(보수적).
+        if heading_exits_bbox(
+            last.lat, last.lon, last.heading, coverage_bbox, DROPOUT_EDGE_MARGIN_DEG
+        ):
             continue
         confirmed = crosscheck.confirm_absence(track.aircraft_ref, (last.ts, now))
         if confirmed is False:

@@ -18,6 +18,7 @@ from anomaly.crosscheck import CrossCheckSource, NullCrossCheckSource
 from anomaly.explainer import ExplainerBackend, TemplateExplainer, explain_draft
 from anomaly.mil_enrich import MilEnrichmentSource, NullMilEnrichment
 from anomaly.rules import (
+    ANOMALY_TYPE_ADSB_DROPOUT,
     AnomalyCandidate,
     AnomalyDraft,
     detect_adsb_dropout,
@@ -208,6 +209,38 @@ def create_from_draft(
     return anomaly
 
 
+def scan_and_resolve(store, now: Optional[int] = None) -> list[Anomaly]:
+    """반증 증거 기반 자동 해소(폴러 전용) — status=candidate인 adsb_dropout 중, 관련 기체의
+    **침묵 시작(anomaly.ts) 이후 신선한 관측**이 존재하면 resolved로 전이한다.
+
+    dropout 후보의 반증 = 그 기체가 다시 관측됨(복귀). anomaly.ts는 침묵 시작(=마지막 관측 ts)
+    이라 latest.ts > anomaly.ts면 침묵 이후 새 관측이 도착 = 복귀. 복귀 관측을 evidenced_by로도
+    링크해 provenance를 남긴다(store.resolve_anomaly — 근거 없는 상태 전이 금지의 연장).
+    confirmed/dismissed(사람 결정)·이미 resolved는 건드리지 않는다. resolved는 자동 재오픈 없음 —
+    재침묵은 last.ts가 달라 dedup상 **새 이벤트**로 정당하게 다시 발화한다(detect_adsb_dropout의
+    침묵-이벤트 단위 dedup이 보장). replay엔 폴러가 없어(scan_and_create_all 미호출) 이 함수도
+    호출되지 않으므로 replay 자산(candidate)은 자동 불변.
+    반환: 이번에 resolved로 전이된 Anomaly 리스트.
+    """
+    now = int(now if now is not None else time.time())
+    latest_by_ac = {o.aircraft_ref: o for o in store.query_latest_observations()}
+    resolved: list[Anomaly] = []
+    for a in store.query_anomalies():
+        if a.type != ANOMALY_TYPE_ADSB_DROPOUT:
+            continue
+        if a.status != "candidate":  # confirmed/dismissed/resolved는 불변
+            continue
+        # involves→Aircraft(SSOT 링크)에서 기체를 얻는다(id 문자열 파싱 대신 온톨로지 역추적).
+        involved = store.query_involves_ids(a.id)
+        last = next((latest_by_ac[i] for i in involved if i in latest_by_ac), None)
+        if last is None:
+            continue
+        if last.ts <= a.ts:  # 침묵 시작 이후 새 관측 없음 → 여전히 침묵, 후보 유지
+            continue
+        resolved.append(store.resolve_anomaly(a.id, obs_id=last.id, resolved_at=now))
+    return resolved
+
+
 def scan_and_create_all(
     store,
     now: Optional[int] = None,
@@ -267,5 +300,10 @@ def scan_and_create_all(
     # 교차소스 상관 영속(dropout↔위성통과↔뉴스 = 은닉 정황 그래프).
     if do_correlate:
         correlation.correlate_all(store, now=now)
+
+    # 반증 증거 기반 자동 해소 — 이번 사이클에 복귀한 기체의 dropout 후보를 resolved로 닫는다
+    # (무인 운영 누적 방지). 폴러 경로 전용이라 여기(scan_and_create_all)에 둔다 — replay는
+    # 이 함수를 호출하지 않아 자동 불변. created(신규 생성)에는 섞지 않는다(전이는 신규 아님).
+    scan_and_resolve(store, now=now)
 
     return created

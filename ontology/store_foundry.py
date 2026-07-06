@@ -1233,6 +1233,17 @@ class HybridStore:
             )
         return result
 
+    def resolve_anomaly(
+        self, anomaly_id: str, obs_id: str, resolved_at: int
+    ) -> Anomaly:
+        # 로컬 권위본만 — Foundry엔 confirm/dismiss-anomaly에 대응하는 **resolve-anomaly 액션이
+        # 없다**(P7 배선 범위 밖). 억지로 set_anomaly_status("resolved")를 태우면 Foundry 쪽은
+        # confirmed/dismissed만 처리하므로 조용한 no-op이 되어 아무 효과 없이 오해만 부른다 →
+        # 배선하지 않고 로컬 권위로 둔다(CLAUDE.local 억지 배선 금지). 복귀 관측 evidenced_by는
+        # 다중 근거라 어차피 로컬 권위본(write_anomaly가 Foundry엔 첫 근거 1건만 미러). 갭은
+        # docs/worklog/anomaly-lifecycle.md에 정직 기록.
+        return self.local.resolve_anomaly(anomaly_id, obs_id, resolved_at)
+
     # ── B2 staged human review (방법 B) ──────────────
     def propose_explanation(
         self, anomaly_id: str, explanation: str, review_status: str = "pending"

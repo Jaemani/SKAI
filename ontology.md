@@ -36,7 +36,7 @@
 | **WeatherState** | region_ref, ts, wind, visibility, ceiling, conditions | 지역 기상 |
 | **NewsEvent** | source, url, ts, geo?, title, summary, entities[] | OSINT/뉴스 = **증거 객체**(저신뢰) |
 | **Operator** | id(PK), name, kind(airline/airforce/satop), country | 귀속용 주체 |
-| **Anomaly** | type, ts, geo, confidence, status(candidate/confirmed/dismissed) | **파생** 이상징후 |
+| **Anomaly** | type, ts, geo, confidence, status(candidate/confirmed/dismissed/**resolved**) | **파생** 이상징후. resolved = 주장(예: 신호 끊김)이 **반증 증거**(복귀 관측, evidenced_by로 연결)로 시스템 해소 — 사람 결정(confirm/dismiss)과 구분 |
 | **SituationAssessment** | region_ref, window, summary, produced_by, created_at | **산출 인텔** 객체(요약) |
 
 ## 2. 링크 타입 (Link Types) — 여기가 깊이의 원천

@@ -75,6 +75,9 @@
     .panel-hd { padding: 10px 13px 8px; border-bottom: 1px solid var(--line); }
     .panel-hd h1 { font-size: 13.5px; margin: 0; display: flex; align-items: center; }
     .panel-hd .sub { color: var(--muted); font-size: 10.5px; margin-top: 3px; line-height: 1.4; }
+    .panel-hd .tl-toggle { display: none; margin-top: 6px; font-size: 11px; color: #9fc4e8;
+      cursor: pointer; }
+    .panel-hd .tl-toggle:hover { color: #eaf3ff; text-decoration: underline; }
 
     /* ── 좌: 이상징후 타임라인 ── */
     #left-rail .panel-hd h1 { color: #ff9a9a; }
@@ -89,12 +92,16 @@
     .anom-item.st-confirmed { border-left-color: #c0392b; }
     .anom-item.st-dismissed { border-left-color: #6b7a8d; opacity: 0.6; }
     .anom-item.st-dismissed .a-title { text-decoration: line-through; }
+    /* resolved = dismissed(기각·오판)와 달리 "주장이 반증돼 시스템이 스스로 닫음" — 차분한 회녹색으로 구분,
+       취소선은 쓰지 않는다(틀렸다는 뜻이 아니라 후속 관측으로 해소됐다는 뜻). */
+    .anom-item.st-resolved { border-left-color: #5c8a72; opacity: 0.72; }
     .anom-item .a-title { font-weight: 600; color: #ffd7d7; font-size: 12.5px; }
     .anom-item .a-meta { color: var(--muted); font-size: 11px; margin-top: 4px;
       display: flex; justify-content: space-between; gap: 8px; align-items: center; }
     .badge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 10px; font-weight: 600; }
     .b-candidate { background: #4a3a12; color: #ffce7a; } .b-confirmed { background: #5a1414; color: #ff9a9a; }
     .b-dismissed { background: #2a333d; color: #9fb0c2; } .b-conf { background: #163a2a; color: #7ce0a8; }
+    .b-resolved { background: #223229; color: #8fc2a8; }
     .b-synth { background: #2d2350; color: #c3a9ff; } .b-corr { background: #123a3a; color: #7fe3e3; }
     .b-region { background: #2d2350; color: #c3a9ff; } .b-lowconf { background: #3a2a12; color: #ffc078; }
     .b-stealthmole { background: #1e2d1e; color: #6ec96e; }
@@ -114,6 +121,7 @@
       padding: 5px 8px; margin: 4px 0; font-size: 11.5px; background: rgba(18, 46, 46, 0.5); }
     #detail .corr .ct { color: #8fe4e4; font-weight: 600; }
     #detail .flowhint { font-size: 10.5px; color: #d9b25a; margin: 6px 0 2px; }
+    #detail .ev.resolved-note { border-left: 3px solid #5c8a72; color: #cfe0f0; }
     #detail .actions { display: flex; gap: 8px; margin-top: 10px; }
     #detail button { flex: 1; padding: 7px 0; border: none; border-radius: 6px; cursor: pointer;
       font-size: 12px; font-weight: 600; color: #fff; }
@@ -460,6 +468,7 @@
         <div class="panel-hd">
           <h1><span class="zone-num">2</span>⚠ 이상징후 타임라인</h1>
           <div class="sub">탐지된 이상 신호. <b>클릭</b> → 지도에서 위치·근거(연결선)·승인/기각</div>
+          <div class="tl-toggle" id="tl-toggle" onclick="toggleTimelineWindow()"></div>
         </div>
         <div id="tl-list"><div class="empty">탐지된 이상징후 없음</div></div>
         <div id="detail"></div>
@@ -476,8 +485,8 @@
           <div class="lg-body">
             <div class="lrow"><span class="dotm l-ac"></span>항공기(콜사인)</div>
             <div class="lrow"><span class="dotm l-mil"></span>🪖 군용 추정 항적(저신뢰)</div>
-            <div class="lrow"><span class="ln l-track"></span>트랙 경로</div>
-            <div class="lrow"><span class="ln l-gap"></span>ADS-B gap 트랙</div>
+            <div class="lrow"><span class="ln l-track"></span>트랙 경로(선택 기체만 · "전체 트랙"으로 상시 표시)</div>
+            <div class="lrow"><span class="ln l-gap"></span>ADS-B gap 트랙(이상징후 서사 — 항상 표시)</div>
             <div class="lrow"><span class="ln l-sat"></span>위성 지상궤적</div>
             <div class="lrow"><span class="dotm l-anom"></span>이상징후</div>
             <div class="lrow"><span class="dotm l-anom" style="border-style:dashed;border-width:2px;border-color:#c3a9ff"></span>이상징후(합성 시나리오)</div>
@@ -487,6 +496,7 @@
               <label class="tog"><input type="checkbox" id="tog-ac" checked /> 항공기 표시</label>
               <label class="tog"><input type="checkbox" id="tog-sat" checked /> 위성 궤적 표시</label>
               <label class="tog"><input type="checkbox" id="tog-trail" checked /> 실시간 잔상</label>
+              <label class="tog"><input type="checkbox" id="tog-tracks" /> 전체 트랙(선택·gap 트랙 외에도 상시 표시)</label>
             </div>
           </div>
         </div>
@@ -632,10 +642,18 @@
     let lastObs = [];
     let showSat = true;
     let showAc = true;        // 항공기 레이어(마커·트랙·잔상·추측항법) 표시 여부
+    // 트랙 폴리라인 기본 숨김(라이브 다수 기체 시 전체 경로가 화면을 뒤덮는 문제) — gap 트랙(이상징후
+    // 서사의 일부)과 선택된 기체만 예외로 그린다. "전체 트랙" 토글로 종전처럼 전부 볼 수 있음.
+    let showAllTracks = false;
+    let selectedTrackIcao = null;   // 항공기 마커 클릭 또는 이상징후 선택(involves)으로 지정
     let selectedId = null;
     let anomMarkers = {};
     let lastAnomalies = [];
     let lastAssessment = null;
+    // 타임라인 기본 시간창(6h) — 장시간 운용 시 기각/해소 이력이 쌓여 목록이 뒤덮이는 것을 방지.
+    // candidate/confirmed(미결·확정)는 창과 무관하게 항상 표시, resolved는 별도 접이식 그룹(항상 존재).
+    const TIMELINE_WINDOW_S = 6 * 3600;
+    let showAllTimeline = false;   // 헤더의 "이전 N건 더 보기" 토글 상태
 
     // ── 항공기 방향(heading) 시각화 + 실시간 잔상 상태 (dead-reckoning 이동은 drTracks가 담당) ──
     let showTrail = true;
@@ -677,8 +695,10 @@
       military_approach: "🪖", satellite_proximity: "🛰", rapid_maneuver: "⚡" };
     const TYPE_COLOR = { emergency_squawk: "#ff3b3b", adsb_dropout: "#ff9f43", loitering: "#feca57",
       military_approach: "#ee5253", satellite_proximity: "#48dbfb", rapid_maneuver: "#a29bfe" };
-    const STATUS_LABEL = { candidate: "후보", confirmed: "확인됨", dismissed: "기각됨" };
-    const STATUS_COLOR = { candidate: "#ff3b3b", confirmed: "#c0392b", dismissed: "#6b7a8d" };
+    const STATUS_LABEL = { candidate: "후보", confirmed: "확인됨", dismissed: "기각됨",
+      resolved: "해소(복귀 확인)" };
+    const STATUS_COLOR = { candidate: "#ff3b3b", confirmed: "#c0392b", dismissed: "#6b7a8d",
+      resolved: "#5c8a72" };
 
     // ════════════════════════════════════════════════════════════
     // 지도 레이어 렌더 (기존 로직 보존)
@@ -704,13 +724,19 @@
       for (const t of tracks) {
         if (!t.path || t.path.length < 2) continue;
         const gap = t.has_gap;
-        if (gap) gapCount++;
-        if (showAc) L.polyline(t.path, {
-          color: gap ? "#ff6b6b" : "#35c26b", weight: gap ? 3 : 2, opacity: 0.85,
-          dashArray: gap ? "6 6" : null,
-        }).bindTooltip((t.callsign || t.icao24) + " · " + t.n_points + "점" +
-          (gap ? " · ⚠ ADS-B gap" : "") +
-          (t.is_military ? " · 🪖 군용 추정(저신뢰)" : "")).addTo(trackLayer);
+        if (gap) gapCount++;   // 통계(n-track/n-gap)는 표시 여부와 무관하게 항상 전수 집계.
+        // 기본은 숨김. 예외: gap 트랙(이상징후 서사 — 상시 표시), 선택된 기체(마커 클릭/이상징후
+        // involves), "전체 트랙" 토글 on. showAc 자체가 꺼지면(항공기 레이어 전체 숨김) 트랙도 없음.
+        const highlight = t.icao24 === selectedTrackIcao;
+        if (showAc && (showAllTracks || gap || highlight)) {
+          L.polyline(t.path, {
+            color: gap ? "#ff6b6b" : (highlight ? "#6fb4ff" : "#35c26b"),
+            weight: gap ? 3 : (highlight ? 3 : 2), opacity: 0.85,
+            dashArray: gap ? "6 6" : null,
+          }).bindTooltip((t.callsign || t.icao24) + " · " + t.n_points + "점" +
+            (gap ? " · ⚠ ADS-B gap" : "") +
+            (t.is_military ? " · 🪖 군용 추정(저신뢰)" : "")).addTo(trackLayer);
+        }
       }
       document.getElementById("n-track").textContent = tracks.length;
       document.getElementById("n-gap").textContent = gapCount;
@@ -768,6 +794,12 @@
         "<br><span style='color:#8aa'>" + esc(o.source) + "</span>";
     }
 
+    // 항공기 마커 클릭 → 그 기체의 풀 트랙만 강조 표시(재클릭 시 해제). 트랙 기본 숨김 정책의 보완.
+    function selectAircraftTrack(icao24) {
+      selectedTrackIcao = selectedTrackIcao === icao24 ? null : icao24;
+      drawTracks(lastTracks);
+    }
+
     // 항공기 관련 시각 전부 제거(마커·잔상·추측항법 상태). 토글 off 시 사용.
     function clearAircraft() {
       acLayer.clearLayers();
@@ -791,6 +823,7 @@
         const cur = tr ? tr.marker.getLatLng() : null;   // 갱신 직전 표시위치
         if (!tr) {
           const m = L.marker([o.lat, o.lon], { icon: acIcon(o, emerg), keyboard: false }).addTo(acLayer);
+          m.on("click", () => selectAircraftTrack(o.icao24));   // icao24는 마커 수명 내 불변 → 클로저 안전
           tr = { marker: m, corrLat: 0, corrLon: 0, corrStart: 0, iconKey, trail: [], line: null };
           drTracks.set(o.icao24, tr);
         } else if (tr.iconKey !== iconKey) {
@@ -954,11 +987,14 @@
         const nCorr = (a.correlations || []).length;
         // 합성 시나리오는 점선 테두리로 실데이터와 구분(DR-0013 #6 — "찾는 척" 인상 방지).
         const synth = !!(a.attrs && a.attrs.is_synthetic);
+        // dismissed(오판 기각)·resolved(반증 해소) 둘 다 "닫힌" 상태라 시각적으로 눌러주되,
+        // 상태색은 STATUS_COLOR로 구분(회색=기각, 회녹색=해소) — 마커가 깨지지 않게 기존 삼항 확장.
         const m = L.circleMarker([a.lat, a.lon], {
           radius: sel ? 15 : 11,
-          color: sel ? "#ffffff" : (a.status === "dismissed" ? "#6b7a8d" : "#ffffff"),
+          color: sel ? "#ffffff" : (a.status === "dismissed" ? "#6b7a8d" :
+            a.status === "resolved" ? STATUS_COLOR.resolved : "#ffffff"),
           weight: sel ? 3 : 2, fillColor: color,
-          fillOpacity: a.status === "dismissed" ? 0.3 : 0.72,
+          fillOpacity: a.status === "dismissed" ? 0.3 : (a.status === "resolved" ? 0.4 : 0.72),
           dashArray: synth ? "4 3" : null,
         }).bindTooltip("<b>" + (TYPE_ICON[a.type] || "⚠") + " " + (TYPE_LABEL[a.type] || a.type) + "</b>" +
           (synth ? " <span style='color:#c3a9ff'>[합성]</span>" : "") +
@@ -973,31 +1009,74 @@
       document.getElementById("n-anom").textContent = anomalies.length;
     }
 
+    // 타임라인 1건 DOM — 메인 목록·해소됨 접이식 그룹 양쪽에서 재사용.
+    function buildAnomItem(a) {
+      const div = document.createElement("div");
+      div.className = "anom-item st-" + a.status + (a.id === selectedId ? " sel" : "");
+      // 왼쪽 테두리 = 유형색(범례·지도 마커와 일치). 상태는 배지·흐림/취소선으로 구분.
+      div.style.borderLeftColor = TYPE_COLOR[a.type] || "#ff3b3b";
+      const synth = a.attrs && a.attrs.is_synthetic ? ' <span class="badge b-synth">합성</span>' : "";
+      const nCorr = (a.correlations || []).length;
+      div.innerHTML =
+        '<div class="a-title">' + (TYPE_ICON[a.type] || "⚠") + " " + (TYPE_LABEL[a.type] || a.type) +
+        (a.attrs && a.attrs.squawk ? " " + esc(a.attrs.squawk) : "") + synth +
+        (nCorr ? ' <span class="badge b-corr" title="교차소스 상관 ' + nCorr + '건 — 클릭해 상세">🔗' + nCorr + "</span>" : "") + "</div>" +
+        '<div class="a-meta"><span>' + esc(a.attrs && a.attrs.callsign ? a.attrs.callsign :
+          (a.attrs && a.attrs.sat_name ? a.attrs.sat_name : a.type)) + " · " + fmtTime(a.ts) + "</span></div>" +
+        '<div class="a-meta"><span class="badge b-conf">신뢰도 ' + a.confidence.toFixed(2) + "</span>" +
+        '<span class="badge b-' + a.status + '">' + (STATUS_LABEL[a.status] || a.status) + "</span></div>";
+      div.onclick = () => selectAnomaly(a.id);
+      return div;
+    }
+
+    function toggleTimelineWindow() {
+      showAllTimeline = !showAllTimeline;
+      renderTimeline(lastAnomalies);
+    }
+    window.toggleTimelineWindow = toggleTimelineWindow;
+
     function renderTimeline(anomalies) {
       const list = document.getElementById("tl-list");
+      const toggleEl = document.getElementById("tl-toggle");
       if (!anomalies.length) {
         list.innerHTML = '<div class="empty">탐지된 이상징후 없음<br><br>' +
           '합성 시나리오 주입:<br><code>python -m scripts.inject_synthetic</code></div>';
+        toggleEl.style.display = "none";
         return;
       }
+      // resolved는 항상 별도 접이식 그룹(주 시야는 candidate/confirmed) — 메인 목록에서 제외.
+      const resolvedGroup = anomalies.filter((a) => a.status === "resolved");
+      const mainList = anomalies.filter((a) => a.status !== "resolved");
+      // candidate/confirmed(미결·확정)는 창과 무관하게 항상 표시. 시간창은 dismissed(기각)에만 적용.
+      const cutoff = nowServer() - TIMELINE_WINDOW_S;
+      const oldDismissedCount = mainList.filter((a) => a.status === "dismissed" && a.ts < cutoff).length;
+      const visible = showAllTimeline ? mainList
+        : mainList.filter((a) => !(a.status === "dismissed" && a.ts < cutoff));
+
+      if (oldDismissedCount > 0 || showAllTimeline) {
+        toggleEl.style.display = "block";
+        toggleEl.textContent = showAllTimeline
+          ? "▴ 최근 " + (TIMELINE_WINDOW_S / 3600) + "시간만 보기"
+          : "▾ 이전 " + oldDismissedCount + "건 더 보기 (6시간 이전 기각건)";
+      } else {
+        toggleEl.style.display = "none";
+      }
+
       list.innerHTML = "";
-      for (const a of anomalies) {
-        const div = document.createElement("div");
-        div.className = "anom-item st-" + a.status + (a.id === selectedId ? " sel" : "");
-        // 왼쪽 테두리 = 유형색(범례·지도 마커와 일치). 상태는 배지·흐림/취소선으로 구분.
-        div.style.borderLeftColor = TYPE_COLOR[a.type] || "#ff3b3b";
-        const synth = a.attrs && a.attrs.is_synthetic ? ' <span class="badge b-synth">합성</span>' : "";
-        const nCorr = (a.correlations || []).length;
-        div.innerHTML =
-          '<div class="a-title">' + (TYPE_ICON[a.type] || "⚠") + " " + (TYPE_LABEL[a.type] || a.type) +
-          (a.attrs && a.attrs.squawk ? " " + esc(a.attrs.squawk) : "") + synth +
-          (nCorr ? ' <span class="badge b-corr" title="교차소스 상관 ' + nCorr + '건 — 클릭해 상세">🔗' + nCorr + "</span>" : "") + "</div>" +
-          '<div class="a-meta"><span>' + esc(a.attrs && a.attrs.callsign ? a.attrs.callsign :
-            (a.attrs && a.attrs.sat_name ? a.attrs.sat_name : a.type)) + " · " + fmtTime(a.ts) + "</span></div>" +
-          '<div class="a-meta"><span class="badge b-conf">신뢰도 ' + a.confidence.toFixed(2) + "</span>" +
-          '<span class="badge b-' + a.status + '">' + (STATUS_LABEL[a.status] || a.status) + "</span></div>";
-        div.onclick = () => selectAnomaly(a.id);
-        list.appendChild(div);
+      if (!visible.length && !resolvedGroup.length) {
+        list.innerHTML = '<div class="empty">표시할 이상징후 없음</div>';
+        return;
+      }
+      for (const a of visible) list.appendChild(buildAnomItem(a));
+
+      if (resolvedGroup.length) {
+        const det = document.createElement("details");
+        det.className = "cluster tl-resolved";
+        det.innerHTML = "<summary>해소됨 " + resolvedGroup.length +
+          '건<span class="cx">펼치기 ▾</span></summary><div class="cbdy"></div>';
+        const body = det.querySelector(".cbdy");
+        for (const a of resolvedGroup) body.appendChild(buildAnomItem(a));
+        list.appendChild(det);
       }
     }
 
@@ -1057,9 +1136,36 @@
       }
       const done = a.status !== "candidate";
       const nEv = (a.evidence || []).filter((e) => e.lat != null && e.lon != null).length;
+      // resolved(반증 해소) 사유 — dropout 주장이 기체 복귀 관측(attrs.resolution)으로 반증된 경우.
+      // dismissed(사람의 기각 판단)와 달리 시스템이 자동으로 닫은 상태라 별도 문구로 구분.
+      let resolutionHtml = "";
+      if (a.status === "resolved") {
+        const res = (a.attrs && a.attrs.resolution) || {};
+        resolutionHtml = '<div class="d-sect">해소 사유</div><div class="ev resolved-note">' +
+          "기체 복귀가 관측되어 자동 해소됨" +
+          (res.resolved_at ? " · " + fmtTime(res.resolved_at) : "") + "</div>";
+        if (res.obs_id) {
+          // evidence/evidence_objects에 복귀 관측이 이미 포함돼 있으면 기존 근거 카드 형식 재사용,
+          // 없으면(백엔드가 아직 evidence 링크에 넣지 않은 경우) obs_id만이라도 표시(추측 필드 생성 금지).
+          const foundObs = (a.evidence || []).find((e) => e.id === res.obs_id);
+          const foundObj = !foundObs && (a.evidence_objects || []).find((e) => e.id === res.obs_id);
+          if (foundObs) {
+            resolutionHtml += '<div class="ev"><div class="ev-h">복귀 관측 · ' + esc(foundObs.callsign || foundObs.icao24) +
+              " · sq " + esc(foundObs.squawk || "—") + "</div>" +
+              "관측 " + fmtTime(foundObs.ts) + " · 출처 " + esc(foundObs.source) + "<br>" +
+              '<a href="' + esc(foundObs.source_url) + '" target="_blank" rel="noopener">' + esc(foundObs.source_url) + "</a></div>";
+          } else if (foundObj) {
+            resolutionHtml += '<div class="ev"><div class="ev-h">복귀 관측 · ' + esc(foundObj.label) + "</div>" +
+              (foundObj.source_url ? '<a href="' + esc(foundObj.source_url) + '" target="_blank" rel="noopener">' + esc(foundObj.source_url) + "</a>" : "") + "</div>";
+          } else {
+            resolutionHtml += '<div class="ev"><div class="ev-h">복귀 관측 · ' + esc(res.obs_id) + "</div></div>";
+          }
+        }
+      }
       box.innerHTML =
         '<div class="d-expl">' + esc(a.explanation) + "</div>" +
         (nEv ? '<div class="flowhint">지도에서 이 이상징후의 근거 관측 ' + nEv + '건을 펄스·흐름선으로 강조합니다.</div>' : "") +
+        resolutionHtml +
         '<div class="d-sect">근거 (evidence · provenance)</div>' + (ev || evObj || "—") +
         (ev && evObj ? evObj : "") +
         (corr ? '<div class="d-sect">교차소스 상관 (correlated_with)</div>' + corr : "") +
@@ -1106,8 +1212,12 @@
         if (m) m.openTooltip();
         drawEvidenceFlow(a);
       }
+      // 이상징후가 특정 기체(involves)와 관련되면 그 기체의 풀 트랙도 함께 강조(트랙 기본 숨김 보완).
+      // gap 트랙은 이미 항상 표시되므로 이 강조는 주로 gap 아닌 유형(비상 스쿽 등)에서 의미 있다.
+      selectedTrackIcao = (a && a.involves && a.involves.length) ? a.involves[0].icao24 : null;
       drawAnomalies(lastAnomalies);
       renderTimeline(lastAnomalies);
+      drawTracks(lastTracks);
       renderDetail();
     }
 
@@ -1233,6 +1343,9 @@
     });
     document.getElementById("tog-trail").addEventListener("change", (ev) => {
       showTrail = ev.target.checked; if (!showTrail) clearTrails();
+    });
+    document.getElementById("tog-tracks").addEventListener("change", (ev) => {
+      showAllTracks = ev.target.checked; drawTracks(lastTracks);
     });
 
     // ════════════════════════════════════════════════════════════

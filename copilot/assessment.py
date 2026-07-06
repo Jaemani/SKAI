@@ -77,7 +77,13 @@ def _fmt_news_age(seconds: float) -> str:
     return f"약 {round(hours)}시간 전"
 
 
-_STATUS_KO = {"candidate": "미검토", "confirmed": "확인됨", "dismissed": "기각됨"}
+# resolved = 반증 증거 기반 자동 해소(복귀 관측으로 침묵 종료 — actions.scan_and_resolve).
+_STATUS_KO = {
+    "candidate": "미검토",
+    "confirmed": "확인됨",
+    "dismissed": "기각됨",
+    "resolved": "해소됨",
+}
 
 
 def _anomaly_sentence_text(d: dict, confidence: float) -> str:
