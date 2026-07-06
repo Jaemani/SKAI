@@ -1,11 +1,11 @@
 # 팀 온보딩 — SKAI 현황 (Air ISR Fusion Copilot)
 
 > D4D 해커톤 T2·공중. 팀원이 현재 상태를 5분 안에 파악하도록.
-> 최종 갱신: 2026-07-05.
+> 최종 갱신: 2026-07-06.
 
 ## 지금 어디까지 됐나 (한눈에)
 
-- **로컬 스택 (P0~P6)**: ✅ 완성 — 4소스 융합·이상탐지 7종·citation 강제 코파일럿·지도/타임라인/서브그래프. 테스트 326 통과.
+- **로컬 스택 (P0~P6)**: ✅ 완성 — 4소스 융합·이상탐지 7종·citation 강제 코파일럿·지도/타임라인/서브그래프. 테스트 403 통과·4 skip(2026-07-06 실측, `pytest tests/ -q`).
 - **Palantir Foundry 이관**: ✅ 온톨로지 11객체·36액션·OSDK 0.12.0·AIP Logic 2함수·staged review·Automation. read/write 라이브 검증.
 - **실시간**: ✅ 4소스 연속 폴링(OpenSky 25s·GDELT 5m·METAR 30m·Celestrak 12h) + RSS. 항적 실시간 부드러운 이동(추측항법).
 - **정직 평가**: `docs/EVALUATION.md` 참조 — 무엇이 진짜고 무엇이 한계인지 냉정하게.
@@ -32,20 +32,37 @@
 
 ## 실행
 
+Python 3.12 이상(메인 `.venv`는 3.14.5로 실측 검증; Foundry 전용 `.venv312`는 3.12.13 — 아래 표 참조). `.env` 없이 클론만으로 아래 전부 동작한다(.env는 Foundry/StealthMole 라이브 전용 — 없어도 replay·live·테스트는 정상).
+
 ```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt  # 최초 1회
+git clone <repo-url> && cd SKAI          # 최초 1회
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 scripts/demo.sh replay      # 오프라인 결정적 (합성 시나리오, 발표 백본)
 scripts/demo.sh live        # 순수 실데이터 (4소스 연속 폴링)
 scripts/demo.sh live --inject military_incursion  # 실데이터 + 군용 합성 시나리오
 scripts/demo.sh stop
 # → http://localhost:8000
-.venv/bin/python -m pytest tests/ -q   # 테스트 326
+.venv/bin/python -m pytest tests/ -q   # 테스트 403 통과·4 skip
 ```
+
+`requirements.txt`는 replay+live+테스트 전체에 필요한 8개 직접 의존성만 핀(전이 의존성은 pip 자동 해결). replay만 필요하면 `requirements-demo.txt`(3개)로 충분 — `Dockerfile.demo`가 그쪽을 쓴다.
+
+### Foundry 없이 되는 범위 vs 개별 토큰 필요한 범위
+
+| 범위 | 필요한 것 | Foundry 계정 필요? |
+|---|---|---|
+| `scripts/demo.sh replay` (발표 백본) | `requirements.txt`만 | ❌ |
+| `scripts/demo.sh live` / `live --inject ...` | `requirements.txt`만 (공개 API만 호출) | ❌ |
+| `pytest tests/ -q` (테스트 403) | `requirements.txt`만 | ❌ |
+| `SKAI_STORE=foundry`(온톨로지 read를 Foundry로) | `.env`(`FOUNDRY_TOKEN`·`FOUNDRY_HOSTNAME`·`FOUNDRY_OSDK_INDEX`) + Python 3.12 전용 `.venv312` + private index 설치(`aip-integration.md` §0-보강·§(3)) | ✅ |
+| `SKAI_COPILOT_LLM=aip` / `SKAI_EXPLAINER=aip`(AIP Logic 서술) | 위와 동일 | ✅ |
+| `scripts/demo_foundry.sh` | 위와 동일 | ✅ |
+| StealthMole 라이브 인제스트 | `.env`의 `STEALTHMOLE_ACCESS_KEY`·`STEALTHMOLE_SECRET_KEY`(팀 채널 공유, NDA) | Foundry는 아니지만 개별 키 필요 |
 
 ## Foundry 모드 (개별 토큰 필요)
 
 `.env`·토큰·NDA 문서는 gitignore라 저장소에 없음. Foundry 실연하려면 각자:
-- `.env`에 `FOUNDRY_TOKEN`·`FOUNDRY_HOSTNAME`·`FOUNDRY_OSDK_INDEX` (팀 채널로 별도 공유)
+- `.env`에 `FOUNDRY_TOKEN`·`FOUNDRY_HOSTNAME`·`FOUNDRY_OSDK_INDEX` (팀 채널로 별도 공유) — **`.env` 자체를 공유하지 말 것**, 값만 개별 전달
 - `SKAI_STORE=foundry`(read를 Foundry로) · `SKAI_COPILOT_LLM=aip`(AIP Logic 요약) · `SKAI_EXPLAINER=aip`(AIP Logic 설명)
 - `scripts/demo_foundry.sh` — 실 Foundry 인제스트 실연
 

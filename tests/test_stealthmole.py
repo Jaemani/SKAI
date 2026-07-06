@@ -255,12 +255,13 @@ def test_ingest_mock_counts(db):
     ]
 
     with patch("connectors.stealthmole.BASE_URL", "https://mock.stealthmole.test"):
-        with patch("httpx.Client") as mock_client_cls:
-            mock_client = MagicMock()
-            mock_client_cls.return_value.__enter__.return_value = mock_client
-            mock_client.get.side_effect = call_order
+        with patch("connectors.stealthmole._SECRET_KEY", "test-secret-key-dummy-32-bytes-minimum-for-hmac"):
+            with patch("httpx.Client") as mock_client_cls:
+                mock_client = MagicMock()
+                mock_client_cls.return_value.__enter__.return_value = mock_client
+                mock_client.get.side_effect = call_order
 
-            counts = ingest(db)
+                counts = ingest(db)
 
     assert counts["gm"] == 2
     assert counts["rm"] == 1
@@ -282,12 +283,13 @@ def test_ingest_skips_pii(db):
     ]
 
     with patch("connectors.stealthmole.BASE_URL", "https://mock.stealthmole.test"):
-        with patch("httpx.Client") as mock_client_cls:
-            mock_client = MagicMock()
-            mock_client_cls.return_value.__enter__.return_value = mock_client
-            mock_client.get.side_effect = call_order
+        with patch("connectors.stealthmole._SECRET_KEY", "test-secret-key-dummy-32-bytes-minimum-for-hmac"):
+            with patch("httpx.Client") as mock_client_cls:
+                mock_client = MagicMock()
+                mock_client_cls.return_value.__enter__.return_value = mock_client
+                mock_client.get.side_effect = call_order
 
-            counts = ingest(db)
+                counts = ingest(db)
 
     # PII GM은 skip → 0
     assert counts["gm"] == 0

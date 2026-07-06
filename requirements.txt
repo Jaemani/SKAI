@@ -1,0 +1,27 @@
+# SKAI 로컬 개발·전체 실행(replay + live + 테스트) 의존성.
+# import 추적(server/ · connectors/ · anomaly/ · copilot/ · ontology/ · scripts/ · eval/ ·
+# tests/ 전체 실 import 그래프)으로 확인 — pip freeze 전체 덤프가 아니라 직접 import되는
+# 패키지만 핀. 나머지(anyio·certifi·click·h11·httpcore·idna·starlette·pydantic_core 등)는
+# 위 패키지들의 전이 의존성으로 pip이 자동 해결한다.
+#
+# replay만 필요하면 requirements-demo.txt(fastapi·uvicorn·pydantic 3개)로 충분하다.
+# 이 파일은 그 상위집합(live 폴러 + 테스트 포함 전체 실행용).
+#
+# 제외: Foundry OSDK(foundry_sdk·foundry_sdk_runtime·skai_osdk_sdk)는 SKAI_STORE=foundry일
+# 때만 ontology/store_foundry.py·anomaly/explainer.py 안에서 함수 내부 lazy import되고,
+# 이 .venv에도 미설치. Foundry 실연에는 별도 Python 3.12 전용 가상환경(.venv312) + private
+# index + FOUNDRY_TOKEN이 필요 — aip-integration.md §0-보강·§(3) 참조. 팀원 개별 온보딩 시
+# 별도 안내(NDA/토큰 공유 채널).
+#
+# 버전은 .venv(Python 3.14.5) 실측 freeze와 동일 핀(2026-07-06 기준, 격리 클론으로 재검증).
+# Python 3.12+ 에서 동작 확인(.venv312=3.12.13, .venv=3.14.5 양쪽 실측).
+
+fastapi==0.139.0        # server/app.py — API 서버
+uvicorn==0.49.0         # server/app.py — ASGI 서버 (uvicorn.run, extras 불필요)
+pydantic==2.13.4        # server/app.py·ontology/* — 스키마·검증
+httpx==0.28.1           # connectors/*(opensky·gdelt·metar·celestrak·adsbfi_tracks·
+                        # mil_enrich_live·stealthmole·rss·crosscheck_live) — 라이브 폴러 HTTP
+sgp4==2.27              # connectors/celestrak.py — 위성 궤도 전파(SGP4)
+PyJWT==2.13.0           # connectors/stealthmole.py — StealthMole 인증 (import명: jwt)
+python-dotenv==1.2.2    # connectors/stealthmole.py·ontology/store_foundry.py·scripts/p7_* — .env 로드 (import명: dotenv)
+pytest==9.1.1           # tests/ — 테스트 스위트(326)
