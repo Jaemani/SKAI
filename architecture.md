@@ -39,7 +39,7 @@
 | 유형 | 룰 신호(그래프 패턴) | 근거 객체 |
 |---|---|---|
 | 비상 스쿽 | Observation.squawk ∈ {7500,7600,7700} | Observation |
-| ADS-B dropout | Track.has_gap within sensitive Region + 교차 미확인 | Track+교차 미러 |
+| ADS-B dropout | 민감구역 내 **현재 신호 침묵**(now−마지막 관측 > 폴간격 인지 임계) + 교차 미확인. 신선한 관측이면 과거 gap 이력 무관하게 비발화, 침묵 이벤트당 1건 | Track+교차 미러 |
 | 군용기 접근 | Aircraft.is_military + Observation within Region(OpArea) | Observation |
 | 로이터링 | Track 경로 반경 내 반복/원형 | Track |
 | 급기동 | 고도·속도 급변(임계) | Observation 시퀀스 |

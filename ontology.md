@@ -73,7 +73,7 @@
 | 유형 | 탐지 = 그래프 패턴 |
 |---|---|
 | 비상 스쿽 | Observation.squawk ∈ {7500,7600,7700} → CreateAnomaly involves Aircraft |
-| ADS-B dropout | Track.has_gap within sensitive Region + 교차소스 미확인 → 저신뢰 Anomaly |
+| ADS-B dropout | 민감구역 내 **현재 신호 침묵**(now−마지막 관측>임계, 폴간격 인지) + 교차소스 미확인 → 저신뢰 Anomaly. Track.has_gap은 경로 재구성용 표식으로 유지 |
 | 군용기 접근 | Aircraft.is_military + Observation within Region(OpArea) |
 | 로이터링 | Track 경로가 반경 내 반복/원형 |
 | 위성 근접/통과 | OrbitPass over Region during window |

@@ -22,6 +22,7 @@ from ontology.model import (
     ANOMALY_WINDOW_SECONDS,
     SENSITIVE_CLASSIFICATIONS,
     Observation,
+    gap_threshold_seconds,
 )
 
 # 비상 스쿽 코드 → 의미 (ICAO 표준 트랜스폰더 비상 코드)
@@ -106,6 +107,12 @@ ANOMALY_TYPE_RAPID_MANEUVER = "rapid_maneuver"
 # dropout: 교차 확인 여부로 신뢰도 이분(단정 금지 — CLAUDE.md). 상세는 crosscheck.py.
 DROPOUT_UNCONFIRMED_CONFIDENCE = 0.42  # 미확인 = 저신뢰 후보(단정 금지 문구)
 DROPOUT_CONFIRMED_CONFIDENCE = 0.72  # 교차 확인 = 상향
+# dropout = "지금 끊겨 있음". 침묵이 이 창(초) 안에서 시작한 것만 활성 후보 — 오래 전 침묵은
+# 지난 일(스팸·콜드스타트 stale DB 방어). 침묵 하한은 gap_threshold_seconds()(폴 간격 인지).
+DROPOUT_ACTIVE_WINDOW_SECONDS = 30 * 60
+# 착륙 억제(보너스): 마지막 관측이 저고도(<이 값, m)면 착륙 추정 → 신뢰도 하향(지상 접촉은 전면 억제).
+DROPOUT_LANDING_ALT_M = 1000.0
+DROPOUT_LANDING_CONFIDENCE = 0.3  # 착륙 추정 시 상한(단정 금지 — 정황도 아래로)
 # 로이터링: 지속 ≥ 임계 AND 변위/경로 비율 낮음(원형·반복). 경로가 너무 짧으면 판정 유보.
 LOITERING_MIN_SECONDS = 10 * 60  # 지속 임계(기본 10분)
 LOITERING_MIN_PATH_KM = 15.0  # 경로 최소 길이(짧으면 정지·노이즈 → 유보)
@@ -182,25 +189,41 @@ def detect_adsb_dropout(
     now: int,
     crosscheck: Optional[CrossCheckSource] = None,
 ) -> list[AnomalyDraft]:
-    """ADS-B dropout 후보. Track.has_gap AND 마지막 위치가 민감 Region 내 + 교차 판정.
+    """ADS-B dropout 후보 = **지금 끊겨 있음**. now−마지막관측 > 침묵 임계 AND 마지막 위치가
+    민감 Region 내 AND 침묵이 활성 창 안에서 시작 + 교차 판정.
+
+    의미(과거 오탐 폭주 교정): 과거 has_gap 이력만으로 발화하지 않는다 — **현재 관측이 신선하면
+    (침묵 임계 미만) 절대 후보 아님**(매 사이클 새 관측을 받는 정상 송신 기체는 dropout 아님).
+    침묵 임계 = gap_threshold_seconds()(실제 폴 간격의 3배 이상 — 60s 폴이면 180s). 침묵 시작
+    (=마지막 관측 ts)이 draft.ts라 dedup이 **침묵 이벤트 단위**로 이뤄진다(같은 침묵=1회,
+    복귀 후 재침묵=새 이벤트, DROPOUT dedup_window=1로 정확 앵커).
 
     CLAUDE.md 기술기준: 단일 소스 결측은 단정하지 않는다. crosscheck로 2차 소스에 부재를
     질의해 — 미확인(None)=저신뢰(0.4대) 후보, 부재 교차 확인(True)=상향(0.7대),
     여전히 관측(False)=우리 쪽 결측은 센서 아티팩트 → **dropout 아님(생성 안 함)**.
+    착륙 억제: 지상 접촉(on_ground)이면 후보에서 제외, 저고도면 착륙 추정으로 신뢰도 하향.
     """
     crosscheck = crosscheck or NullCrossCheckSource()
+    silence_threshold = gap_threshold_seconds()
     out: list[AnomalyDraft] = []
     for track in tracks:
-        if not track.has_gap:
-            continue
         last = latest_obs_by_ac.get(track.aircraft_ref)
         if last is None:
             continue
-        region = region_of_point(sensitive_regions, last.lat, last.lon)
-        if region is None:  # 민감구역 밖의 gap은 dropout 후보 아님
+        silence = now - last.ts
+        # 지금 끊겨 있는가? 신선한 관측(침묵 임계 미만)은 과거 gap 이력과 무관하게 후보 아님.
+        if silence <= silence_threshold:
             continue
-        window = (last.ts, now)
-        confirmed = crosscheck.confirm_absence(track.aircraft_ref, window)
+        # 활성 창 밖(오래 전 침묵)은 지난 일 — 재발화·콜드스타트 stale DB 폭주 방어.
+        if silence > DROPOUT_ACTIVE_WINDOW_SECONDS:
+            continue
+        region = region_of_point(sensitive_regions, last.lat, last.lon)
+        if region is None:  # 민감구역 밖의 침묵은 dropout 후보 아님
+            continue
+        # 착륙 억제 — 지상 접촉은 dropout 아님(착륙·택싱). 저고도는 아래서 신뢰도만 하향.
+        if last.on_ground:
+            continue
+        confirmed = crosscheck.confirm_absence(track.aircraft_ref, (last.ts, now))
         if confirmed is False:
             # 2차 소스가 여전히 관측 중 → 우리 결측은 아티팩트, dropout 단정 안 함.
             continue
@@ -209,10 +232,13 @@ def detect_adsb_dropout(
             if confirmed is True
             else DROPOUT_UNCONFIRMED_CONFIDENCE
         )
+        likely_landing = last.alt is not None and last.alt < DROPOUT_LANDING_ALT_M
+        if likely_landing:  # 저고도 침묵 = 착륙 추정 → 상한을 저신뢰로(단정 금지 강화)
+            confidence = min(confidence, DROPOUT_LANDING_CONFIDENCE)
         out.append(
             AnomalyDraft(
                 type=ANOMALY_TYPE_ADSB_DROPOUT,
-                ts=last.ts,
+                ts=last.ts,  # 침묵 시작(=마지막 관측) — dedup 앵커
                 lat=last.lat,
                 lon=last.lon,
                 dedup_key=track.aircraft_ref,
@@ -223,8 +249,13 @@ def detect_adsb_dropout(
                     "region": region.name,
                     "cross_confirmed": confirmed,  # None(미확인) | True(부재확인)
                     "last_seen_ts": last.ts,
+                    "silence_seconds": int(silence),
+                    "likely_landing": likely_landing,
                     "is_synthetic": last.source == "synthetic",
                 },
+                # dedup을 침묵 시작 시각(last.ts) 정확값으로 앵커 — 같은 침묵은 1개 Anomaly,
+                # 복귀 후 재침묵은 last.ts가 달라 새 이벤트로 정당하게 발화(버킷 경계 무관).
+                dedup_window=1,
             )
         )
     return out

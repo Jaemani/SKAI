@@ -29,7 +29,9 @@ from anomaly.rules import (
     ANOMALY_TYPE_MILITARY_APPROACH,
     ANOMALY_TYPE_RAPID_MANEUVER,
     ANOMALY_TYPE_SATELLITE_PROXIMITY,
+    DROPOUT_ACTIVE_WINDOW_SECONDS,
     DROPOUT_CONFIRMED_CONFIDENCE,
+    DROPOUT_LANDING_CONFIDENCE,
     DROPOUT_UNCONFIRMED_CONFIDENCE,
     MANEUVER_CONFIDENCE_BASE,
     detect_adsb_dropout,
@@ -143,13 +145,94 @@ def test_dropout_present_mirror_no_anomaly():
     assert drafts == []
 
 
-def test_dropout_negative_no_gap():
-    tr, last = _dropout_setup()
-    tr.has_gap = False
+def test_dropout_negative_fresh_transmitting():
+    # 핵심 오탐 교정: 과거 gap 이력(has_gap=True)이 있어도 **지금 관측이 신선하면** dropout 아님.
+    # 정상 송신 중(매 사이클 새 관측) 기체가 발화하던 폭주를 차단한다.
+    last = _obs("d1", ts=1980, lat=36.2, lon=124.5)  # now−last = 20s < 침묵 임계(90)
+    tr = _track("d1", [[36.2, 124.5]], 400, 1980, has_gap=True)
     assert (
         detect_adsb_dropout([tr], {"d1": last}, SENSITIVE, 2000, NullCrossCheckSource())
         == []
     )
+
+
+def test_dropout_negative_stale_silence():
+    # 활성 창(30분)보다 오래 전 침묵 → 지난 일, 발화 안 함(콜드스타트 stale DB 폭주 방어).
+    stale_last = _obs("d1", ts=1000, lat=36.2, lon=124.5)
+    now = 1000 + DROPOUT_ACTIVE_WINDOW_SECONDS + 60
+    tr = _track("d1", [[36.2, 124.5]], 400, 1000, has_gap=True)
+    assert (
+        detect_adsb_dropout(
+            [tr], {"d1": stale_last}, SENSITIVE, now, NullCrossCheckSource()
+        )
+        == []
+    )
+
+
+def test_dropout_return_then_resilence_new_event():
+    # 침묵 → 복귀(새 관측) → 재침묵은 **새 이벤트**(dedup 앵커 = 침묵 시작 ts).
+    tr = _track("d1", [[36.2, 124.5]], 400, 1000, has_gap=True)
+    # 침묵 1: 마지막 관측 ts=1000, 두 번 스캔해도 같은 이벤트(1개 id).
+    d1a = detect_adsb_dropout(
+        [tr], {"d1": _obs("d1", ts=1000)}, SENSITIVE, 1300, NullCrossCheckSource()
+    )
+    d1b = detect_adsb_dropout(
+        [tr], {"d1": _obs("d1", ts=1000)}, SENSITIVE, 1400, NullCrossCheckSource()
+    )
+    assert len(d1a) == 1 and len(d1b) == 1
+    assert d1a[0].anomaly_id == d1b[0].anomaly_id  # 같은 침묵 = 1회
+    # 복귀 후 재침묵: 마지막 관측 ts=2000 → 다른 id(정당한 새 이벤트).
+    d2 = detect_adsb_dropout(
+        [tr], {"d1": _obs("d1", ts=2000)}, SENSITIVE, 2300, NullCrossCheckSource()
+    )
+    assert len(d2) == 1
+    assert d2[0].anomaly_id != d1a[0].anomaly_id
+
+
+def test_dropout_poll_interval_scales_threshold(monkeypatch):
+    # 폴 간격 인지: SKAI_POLL_INTERVAL=60이면 침묵 임계=180s. base(90)는 넘지만 180 미만인
+    # 150s 침묵은 발화하지 않아야 한다(느린 폴에서의 정상 지연을 dropout으로 오판 방지).
+    last = _obs("d1", ts=1000, lat=36.2, lon=124.5)
+    tr = _track("d1", [[36.2, 124.5]], 400, 1000, has_gap=True)
+    monkeypatch.setenv("SKAI_POLL_INTERVAL", "60")
+    assert (
+        detect_adsb_dropout([tr], {"d1": last}, SENSITIVE, 1150, NullCrossCheckSource())
+        == []  # 침묵 150s < 180s(=3×60)
+    )
+    # 같은 폴 간격에서 침묵 200s(>180)는 정상 발화.
+    assert (
+        len(
+            detect_adsb_dropout(
+                [tr], {"d1": last}, SENSITIVE, 1200, NullCrossCheckSource()
+            )
+        )
+        == 1
+    )
+
+
+def test_dropout_landing_suppressed_on_ground():
+    # 지상 접촉(on_ground) 마지막 관측 → 착륙·택싱, dropout 아님(전면 억제).
+    last = _obs("d1", ts=1000, lat=36.2, lon=124.5)
+    last.on_ground = True
+    tr = _track("d1", [[36.2, 124.5]], 400, 1000, has_gap=True)
+    assert (
+        detect_adsb_dropout([tr], {"d1": last}, SENSITIVE, 2000, NullCrossCheckSource())
+        == []
+    )
+
+
+def test_dropout_low_altitude_downgrades_confidence():
+    # 저고도(<1000m) 침묵 → 착륙 추정 → 신뢰도 상한을 저신뢰로 하향(단정 금지 강화).
+    last = _obs("d1", ts=1000, lat=36.2, lon=124.5)
+    last.alt = 500.0
+    tr = _track("d1", [[36.2, 124.5]], 400, 1000, has_gap=True)
+    drafts = detect_adsb_dropout(
+        [tr], {"d1": last}, SENSITIVE, 2000, SyntheticMirrorSource(absent={"d1"})
+    )
+    assert len(drafts) == 1
+    # 교차 확인(0.72)이어도 저고도면 착륙 상한(0.3) 이하로.
+    assert drafts[0].confidence <= DROPOUT_LANDING_CONFIDENCE
+    assert drafts[0].signal["likely_landing"] is True
 
 
 def test_dropout_negative_outside_sensitive_region():

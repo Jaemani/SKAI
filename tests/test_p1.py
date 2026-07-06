@@ -109,6 +109,18 @@ def test_track_unsorted_input():
     assert track.has_gap is True
 
 
+def test_track_gap_threshold_poll_interval_aware(monkeypatch):
+    # 폴 간격 인지: 같은 120초 간격이 폴 간격에 따라 gap 여부가 달라진다.
+    obs = _obs_seq("eee", [1000, 1120])  # 120초 간격
+    assert (
+        build_track("eee", obs).has_gap is True
+    )  # env 미설정 → 임계 90 → 120 > 90 → gap
+    monkeypatch.setenv("SKAI_POLL_INTERVAL", "60")
+    assert build_track("eee", obs).has_gap is False  # 임계 180(=3×60) → 120 < 180
+    obs2 = _obs_seq("eee", [1000, 1200])  # 200초 > 180 → gap
+    assert build_track("eee", obs2).has_gap is True
+
+
 # ──────────────────────────────────────────────
 # 3. Event → 온톨로지 객체 매핑 (P0A gotcha 포함)
 # ──────────────────────────────────────────────
