@@ -202,6 +202,17 @@ live() {
 stop() {
   _stop_pidfile "$POLLER_PID"
   _stop_pidfile "$SERVER_PID"
+  # 고아 스윕 — pid 파일은 크래시·재기동을 거치면 무효화돼도 프로세스 자체는 남을 수 있어
+  # pid 파일 정리만으론 못 잡는다(2026-07-06 실측: 고아 pid 87084가 :8000 계속 점유).
+  # ①포트 점유 프로세스 ②이 레포 venv 절대경로로 스코프한 실행 커맨드 패턴만 정리
+  # (범용 "python -m server.app" 매칭은 다른 프로젝트 동명 모듈까지 오살할 위험이 있음).
+  local orphans; orphans="$(lsof -ti ":$PORT" 2>/dev/null || true)"
+  if [ -n "$orphans" ]; then
+    echo "$orphans" | xargs kill 2>/dev/null || true
+    echo "고아 정리: :$PORT 점유 프로세스 kill ($orphans)"
+  fi
+  pkill -f "$PY -m server.app" 2>/dev/null && echo "고아 정리: server.app 잔존 프로세스 kill" || true
+  pkill -f "$PY -m connectors.opensky" 2>/dev/null && echo "고아 정리: connectors.opensky 잔존 프로세스 kill" || true
 }
 
 status() {
