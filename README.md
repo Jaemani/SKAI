@@ -109,5 +109,6 @@ Foundry 모드(개별 토큰 필요)와 팀 온보딩 상세는 [`TEAM.md`](TEAM
 | 시간순 변경 이력 | [`docs/CHANGELOG.md`](docs/CHANGELOG.md) |
 | 단계별 실행 로그 (P0~P7 + 각 라운드 상세) | [`docs/worklog/`](docs/worklog/) |
 | Foundry 구축·AIP Logic·staged review·Automation 재현 가이드 | [`docs/foundry-*.md`](docs/) |
+| **화면 캡처 — 기능별 시각 문서** | [`docs/SCREENS.md`](docs/SCREENS.md) |
 | 사용법·화면 설명 | [`docs/USER-GUIDE.md`](docs/USER-GUIDE.md) |
 | 팀 온보딩 | [`TEAM.md`](TEAM.md) |
