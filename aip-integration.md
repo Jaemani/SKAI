@@ -53,7 +53,7 @@ pip install <PKG> --upgrade --extra-index-url "https://:$FOUNDRY_TOKEN@<INDEX-UR
 # 저수준 대체(3.14 OK): pip install foundry-platform-sdk
 ```
 ```python
-# ✅ 실행 검증 완료(2026-07-04, ROUNDTRIP-OK) — 상세·전체 스니펫: docs/worklog/P0B-foundry.md §8-4
+# 실행 검증 완료(2026-07-04, ROUNDTRIP-OK) — 상세·전체 스니펫: docs/worklog/P0B-foundry.md §8-4
 # 하이브리드: read = 생성 OSDK(skai_osdk_sdk), write = 저수준 foundry_sdk의 액션 apply
 # (발행 OSDK에 Action 미포함 시 client.ontology.actions가 비므로 저수준 우회 — 재발행 시 Action 포함 권장)
 import os

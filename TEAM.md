@@ -5,12 +5,12 @@
 
 ## 지금 어디까지 됐나 (한눈에)
 
-- **로컬 스택 (P0~P6)**: ✅ 완성 — 4소스 융합·이상탐지 7종·citation 강제 코파일럿·지도/타임라인/서브그래프. 테스트 409 통과·4 skip(2026-07-06 실측).
-- **Palantir Foundry 이관**: ✅ 온톨로지 11객체·36액션·OSDK 0.12.0·AIP Logic 2함수·staged review·Automation. read/write 라이브 검증.
-- **실시간**: ✅ 4소스 연속 폴링(OpenSky 25s·GDELT 5m·METAR 30m·Celestrak 12h) + RSS. 항적 실시간 부드러운 이동(추측항법).
+- **로컬 스택 (P0~P6)**: 완성 — 4소스 융합·이상탐지 7종·citation 강제 코파일럿·지도/타임라인/서브그래프. 테스트 409 통과·4 skip(2026-07-06 실측).
+- **Palantir Foundry 이관**: 완료 — 온톨로지 11객체·36액션·OSDK 0.12.0·AIP Logic 2함수·staged review·Automation. read/write 라이브 검증.
+- **실시간**: 완료 — 4소스 연속 폴링(OpenSky 25s·GDELT 5m·METAR 30m·Celestrak 12h) + RSS. 항적 실시간 부드러운 이동(추측항법).
 - **정직 평가**: `docs/EVALUATION.md` 참조 — 무엇이 진짜고 무엇이 한계인지 냉정하게.
 
-## ⚠️ 논의 중인 핵심 방향 (2026-07-05)
+## 논의 중인 핵심 방향 (2026-07-05)
 
 **"AIP를 로컬 대체가 아니라, AIP여야 풀리는 문제에 써야 한다"** — 현재 AIP Logic 2함수(설명·요약 생성)는 로컬로도 되던 걸 옮긴 수준. 다음 방향 후보: **dropout 노이즈(정상 여객기 구역이탈 오탐 40건)를 AIP Agent triage로 해결** — 후보+온톨로지 서브그래프를 AIP가 traverse해 진짜 신호/노이즈 분류. 온톨로지(그래프)+AIP(추론)가 함께 값을 하는 지점. **미착수 — 팀 결정 필요.**
 
@@ -50,12 +50,12 @@ scripts/demo.sh stop
 
 | 범위 | 필요한 것 | Foundry 계정 필요? |
 |---|---|---|
-| `scripts/demo.sh replay` (발표 백본) | `requirements.txt`만 | ❌ |
-| `scripts/demo.sh live` / `live --inject ...` | `requirements.txt`만 (공개 API만 호출) | ❌ |
-| `pytest tests/ -q` (테스트 409) | `requirements.txt`만 | ❌ |
-| `SKAI_STORE=foundry`(온톨로지 read를 Foundry로) | `.env`(`FOUNDRY_TOKEN`·`FOUNDRY_HOSTNAME`·`FOUNDRY_OSDK_INDEX`) + Python 3.12 전용 `.venv312` + private index 설치(`aip-integration.md` §0-보강·§(3)) | ✅ |
-| `SKAI_COPILOT_LLM=aip` / `SKAI_EXPLAINER=aip`(AIP Logic 서술) | 위와 동일 | ✅ |
-| `scripts/demo_foundry.sh` | 위와 동일 | ✅ |
+| `scripts/demo.sh replay` (발표 백본) | `requirements.txt`만 | 불필요 |
+| `scripts/demo.sh live` / `live --inject ...` | `requirements.txt`만 (공개 API만 호출) | 불필요 |
+| `pytest tests/ -q` (테스트 409) | `requirements.txt`만 | 불필요 |
+| `SKAI_STORE=foundry`(온톨로지 read를 Foundry로) | `.env`(`FOUNDRY_TOKEN`·`FOUNDRY_HOSTNAME`·`FOUNDRY_OSDK_INDEX`) + Python 3.12 전용 `.venv312` + private index 설치(`aip-integration.md` §0-보강·§(3)) | 필요 |
+| `SKAI_COPILOT_LLM=aip` / `SKAI_EXPLAINER=aip`(AIP Logic 서술) | 위와 동일 | 필요 |
+| `scripts/demo_foundry.sh` | 위와 동일 | 필요 |
 | StealthMole 라이브 인제스트 | `.env`의 `STEALTHMOLE_ACCESS_KEY`·`STEALTHMOLE_SECRET_KEY`(팀 채널 공유, NDA) | Foundry는 아니지만 개별 키 필요 |
 
 ## Foundry 실사용 (팀원용) — 접근부터 화면까지
@@ -64,7 +64,7 @@ scripts/demo.sh stop
 
 ### 1. 접근 경로 (둘 중 하나)
 
-- **A안 — 기존 enrollment 합류(권장)**: 구축자(현 계정 소유자)가 build.palantir.com에서 팀원 초대가 가능한지 확인(Dev Tier 조직 설정에 따라 다름 — 안 보이면 해커톤 Palantir/Morph 멘토에게 문의). 합류하면 팀원이 **본인 토큰을 직접 발급**한다: Account(사이드바 하단) → Settings → Tokens → Generate(**값은 1회만 표시**). ⚠️ 남의 토큰을 받아 쓰는 방식은 비권장 — 감사추적이 섞이고, 회수(revoke) 시 전원이 끊긴다.
+- **A안 — 기존 enrollment 합류(권장)**: 구축자(현 계정 소유자)가 build.palantir.com에서 팀원 초대가 가능한지 확인(Dev Tier 조직 설정에 따라 다름 — 안 보이면 해커톤 Palantir/Morph 멘토에게 문의). 합류하면 팀원이 **본인 토큰을 직접 발급**한다: Account(사이드바 하단) → Settings → Tokens → Generate(**값은 1회만 표시**). 주의: 남의 토큰을 받아 쓰는 방식은 비권장 — 감사추적이 섞이고, 회수(revoke) 시 전원이 끊긴다.
 - **B안 — 자기 enrollment에 재구축**: build.palantir.com 무료 가입 후 `docs/foundry-build-guide.md`를 따라 온톨로지(11객체·36액션)를 직접 구축. **스키마 생성은 API가 없어 UI 수작업**(반나절 안팎). 완전 독립 환경이 필요할 때만.
 
 ### 2. 로컬 배선 (.venv312 + OSDK — `aip-integration.md` §0-보강·§3이 SSOT)
@@ -92,7 +92,7 @@ python3.12 -m venv .venv312        # 생성 OSDK는 >=3.9,<3.13 — 3.12 전용 
 
 ## 정직 원칙 (발표·문서 공통)
 
-- "AIP가 탐지/판단한다" ❌ — 탐지·상관·평가·근거강제는 우리 엔진. AIP는 **설명·요약 서술 생성**만.
-- "정밀도 100%" ❌ — 합성 회귀 검증일 뿐. 라이브 P/R은 ground truth 없어 불가.
+- 금지 문구 "AIP가 탐지/판단한다" — 탐지·상관·평가·근거강제는 우리 엔진. AIP는 **설명·요약 서술 생성**만.
+- 금지 문구 "정밀도 100%" — 합성 회귀 검증일 뿐. 라이브 P/R은 ground truth 없어 불가.
 - 어필하는 것: ① 스키마 레벨 근거 강제(앱 우회해도 Palantir가 거부) ② citation 11/11 vs 맨몸 LLM 0.
 - 상세: `docs/EVALUATION.md` "발표에서 할 말 / 하면 안 될 말".
