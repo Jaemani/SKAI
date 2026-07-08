@@ -143,7 +143,7 @@ SKAI의 문제의식은 **데이터 수집**이 아니라 **근거 있는 공중
 
 ## 6. Screenshots
 
-전체 인벤토리(11장, 장면별 온톨로지 요소 설명): [`docs/SCREENS.md`](docs/SCREENS.md)
+아래 대표 컷은 **2026-07-08 라이브 실데이터 캡처**다(실항적 258기·실 dropout 26건·위성 통과 77건 — 재현 불가능한 실세계 스냅샷). 전체 인벤토리(12장, 장면별 온톨로지 요소 설명·라이브/replay 구분): [`docs/SCREENS.md`](docs/SCREENS.md)
 
 | 전체 화면: 지도·타임라인·소스 3열 | 코파일럿: 문장별 cites 배지 |
 |---|---|
@@ -156,6 +156,10 @@ SKAI의 문제의식은 **데이터 수집**이 아니라 **근거 있는 공중
 | 서브그래프: correlated_with | 결정 루프: confirm 상태 전이 |
 |---|---|
 | <img src="docs/screens/08_subgraph.png" width="420" alt="Ontology subgraph modal"> | <img src="docs/screens/10_confirm_loop.png" width="420" alt="Confirm state transition"> |
+
+| 라이프사이클: 복귀 관측으로 자동 해소된 dropout | 소스 신선도(LIVE)·뉴스 |
+|---|---|
+| <img src="docs/screens/11_timeline_resolved.png" width="420" alt="Resolved anomalies group (live)"> | <img src="docs/screens/09_sources_news.png" width="420" alt="Source freshness and news panel"> |
 
 ## 7. Artifact Versions
 
