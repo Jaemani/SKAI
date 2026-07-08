@@ -25,7 +25,6 @@
 | 온톨로지 (핵심 설계) | `ontology.md` |
 | 시간순 변경 이력 | `docs/CHANGELOG.md` |
 | 왜 이렇게 결정했나 | `docs/decisions/DR-0001~0012` |
-| 발표 대본·제출 자료 (아카이브) | `docs/hackathon/` (대본 `demo.md`·제출 준비물 `submission/`) |
 | 사용법·화면 설명 | `docs/USER-GUIDE.md` |
 | 각 작업 상세 로그 | `docs/worklog/` |
 | Foundry 구축 가이드 | `docs/foundry-*.md` |
@@ -45,7 +44,7 @@ scripts/demo.sh stop
 .venv/bin/python -m pytest tests/ -q   # 테스트 409 통과·4 skip
 ```
 
-`requirements.txt`는 replay+live+테스트 전체에 필요한 8개 직접 의존성만 핀(전이 의존성은 pip 자동 해결). replay만 필요하면 `requirements-demo.txt`(3개)로 충분 — `Dockerfile.demo`가 그쪽을 쓴다.
+`requirements.txt`는 replay+live+테스트 전체에 필요한 8개 직접 의존성만 핀(전이 의존성은 pip 자동 해결).
 
 ### Foundry 없이 되는 범위 vs 개별 토큰 필요한 범위
 

@@ -54,6 +54,7 @@
 ## 2026-07-08
 
 - [docs] **README 전면 재작성** — 대회 정보·문제의식·접근(가설 5종과 검증 결과)·산출물 버전별·최종 결론(방어되는 것/한계)·방향을 객관·정직 기준으로. 발표·제출 자료는 `docs/hackathon/`으로 아카이브(demo.md·submission/). DR-0014(라이브 운영 라운드) 사후 기록 + 심각한 오류 3건(dropout 폭주·:8000 고아 유령응답·이상징후 무한누적) 교훈 명문화
+- [docs] 발표·제출 자료(docs/hackathon/)와 배포용 도커 세트(Dockerfile.demo·requirements-demo.txt·entrypoint·.dockerignore) **삭제** — 터널 채택으로 도커 경로 실사용 0, 대회 종료로 발표 자산 불필요(사용자 지시). git 이력(4dab580 이전)에 보존
 - [pipeline] `demo.sh stop` 고아 스윕 보강 — pid 파일 한계로 크래시 경유 고아 프로세스가 :8000을 점유하던 버그(07-06 실측) 수정
 
 ## 2026-07-06

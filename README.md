@@ -61,7 +61,7 @@
 | **DR-0011** (07-04) | 대화형 코파일럿(의도 분류)·실시간 폴링·프론트 재설계 | UX 라운드 |
 | **DR-0012** (07-05) | 과장→사실 전환: **AIP Logic 2함수 실배선**(explain-anomaly·region-situation-summary — 온톨로지 객체 참조로 서술 생성), OSDK 타입드 read, Foundry-primary read 모드, staged review·Automation 검증, OSDK 0.12.0 | AIP 전 구성요소 실사용 도달 |
 | **DR-0013** (07-05) | 신호 정직화: 위성 근접을 ISR 허용목록 48기로 게이트(스팸 차단), 상관 사유(시간차·거리) 영속·표시, 합성 라벨 전면 전파, 뉴스 48h·오링크 수정, 설명 레이어(서브그래프 안내·소스 신선도) | 테스트 366 |
-| **제출판** (07-05) | 라이브 데모 URL(터널)·스크린샷 8장·설명문 — [`docs/hackathon/`](docs/hackathon/) 아카이브 | 제출 완료 |
+| **제출판** (07-05) | 라이브 데모 URL(터널)·스크린샷 8장·설명문 제출 (제출물 원본은 저장소에서 정리 — git 이력 `4dab580` 이전에 보존) | 제출 완료 |
 | **DR-0014** (07-05~08) | 라이브 운영: adsb.fi 항적 대체(쿼터 무관)·군용기 지도 가시화(실기체 포착)·**dropout 의미 재정의**(오탐 폭주 근절)·**resolved 라이프사이클**(반증 증거 기반 자동 해소)·트랙 표시 정리 | **테스트 422** — 순수 실데이터로 탐지→해소 루프 성립 |
 
 ## 6. 최종 결론 (객관·솔직)
@@ -108,7 +108,6 @@ Foundry 모드(개별 토큰 필요)와 팀 온보딩 상세는 [`TEAM.md`](TEAM
 | 의사결정 기록 (왜 이렇게 했나) | [`docs/decisions/DR-0001~0014`](docs/decisions/) |
 | 시간순 변경 이력 | [`docs/CHANGELOG.md`](docs/CHANGELOG.md) |
 | 단계별 실행 로그 (P0~P7 + 각 라운드 상세) | [`docs/worklog/`](docs/worklog/) |
-| 발표 대본·제출 자료 (아카이브) | [`docs/hackathon/`](docs/hackathon/) |
 | Foundry 구축·AIP Logic·staged review·Automation 재현 가이드 | [`docs/foundry-*.md`](docs/) |
 | 사용법·화면 설명 | [`docs/USER-GUIDE.md`](docs/USER-GUIDE.md) |
 | 팀 온보딩 | [`TEAM.md`](TEAM.md) |
