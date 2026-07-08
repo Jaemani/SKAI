@@ -53,6 +53,7 @@
 - [architecture] **신호·화면 정직화 Phase B**(DR-0013): ① 라이브 군용 식별 보강 — adsb.fi `/v2/mil` 스냅샷(60s TTL, 호출 1req/60s)의 dbFlags&1(readsb 문서 확정)로 군용 hex 집합 캐시, 우선순위 DB플래그 0.65 > 콜사인 휴리스틱 0.55 > 합성 명시, mil_reason이 설명문까지 전파. 게이트 SKAI_MIL_ENRICH=live(코드 기본 off, demo.sh live 기본 on). 오탐 실증(민간기 DB 오등록) 기록 — 저신뢰 원칙 유지. ② 합성 라벨 전면 전파: 지도 마커·cite 배지·서브그래프 노드·요약 헤드라인 "(합성 N건 포함)". ③ 설명 레이어: 서브그래프 모달 안내줄+엣지 한국어 병기, Anomaly 노드 원소스 링크(첫 evidence), Aircraft 노드 좌표 보강(기존 '지도에서 보기' 무동작 버그 수정), 소스 패널 소스별 설명·신선도 배지, 상관 리스트를 reason 기반 사유 문장으로(상위 3+접기). ④ demo.sh live에 SKAI_CROSSCHECK=live 기본화(dropout 교차확인 이중경로 실동작) + adsb.fi 크레딧 UI 상시 표기(ToS).
 ## 2026-07-08
 
+- [architecture] **서브그래프 상한(declutter)**: 라이브에서 이상징후 41건·상관 엣지 696개가 전부 펼쳐져 판독 불가(실측 노드 176·엣지 870 — 주범은 위성이 아니라 상관 폭발). build_subgraph에 상한 도입 — aggregates 신뢰도 상위 8·cites kind별 6·상관 이상징후당 3, 초과분은 "+N건 더" 표시자 노드(type=more)·모달에 "(상위 일부만 표시 — 정직 표기)"·범례 항목. entity/why 의도의 대상 이상징후는 상한 예외(항상 포함). 적용 후 노드 53·엣지 73. 주의: replay도 서사용 밀집 상관 때문에 상한 발동(요약형으로 보임 — 스크린샷 정합은 무영향). 테스트 428 passed/2 skipped
 - [docs] **README 전면 재작성** — 대회 정보·문제의식·접근(가설 5종과 검증 결과)·산출물 버전별·최종 결론(방어되는 것/한계)·방향을 객관·정직 기준으로. 발표·제출 자료는 `docs/hackathon/`으로 아카이브(demo.md·submission/). DR-0014(라이브 운영 라운드) 사후 기록 + 심각한 오류 3건(dropout 폭주·:8000 고아 유령응답·이상징후 무한누적) 교훈 명문화
 - [docs] 발표·제출 자료(docs/hackathon/)와 배포용 도커 세트(Dockerfile.demo·requirements-demo.txt·entrypoint·.dockerignore) **삭제** — 터널 채택으로 도커 경로 실사용 0, 대회 종료로 발표 자산 불필요(사용자 지시). git 이력(4dab580 이전)에 보존
 - [pipeline] `demo.sh stop` 고아 스윕 보강 — pid 파일 한계로 크래시 경유 고아 프로세스가 :8000을 점유하던 버그(07-06 실측) 수정

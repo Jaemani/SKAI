@@ -1170,13 +1170,40 @@ def assess(
     }
 
 
+# 라이브 창(수십 건 이상징후·위성통과)에서 서브그래프가 동심원 헤어볼이 되는 걸 막는 확장
+# 상한(DR-0014). 초과분은 실 노드 대신 "more" 표시자 노드 1개로 요약 — provenance는 잃지
+# 않는다(전체 목록은 타임라인/답변 문장이 이미 cites로 갖고 있다). 상한 값은 라이브 실측
+# (30분 창 이상징후 26건·위성통과 수십 건)에서 라벨이 겹치지 않는 선으로 정함.
+_SG_ANOMALY_CAP = 8
+_SG_CITES_CAP_PER_KIND = 6
+_SG_CORRELATION_CAP = 3
+
+
+def _sg_more_node(node_id: str, remaining: int) -> dict:
+    """상한 초과분 표시자 노드 — 클릭 상세 없음(type="more"), 지도 버튼 없음(좌표 None)."""
+    return {
+        "id": node_id,
+        "type": "more",
+        "label": f"+{remaining}건 더 — 전체는 타임라인/답변에서",
+        "lat": None,
+        "lon": None,
+    }
+
+
 def build_subgraph(store, assessment_id: str) -> Optional[dict]:
     """Assessment 중심 서브그래프(노드·엣지) — 프론트 자체 SVG 렌더용(DR-0006).
 
     깊이(온톨로지 다중홉 시연): SituationAssessment
       —aggregates→ Anomaly —evidenced_by→ Observation / —involves→ Aircraft
       —cites→ OrbitPass / WeatherState / NewsEvent.
-    반환 {center, nodes:[{id,type,label,lat,lon,...}], edges:[{src,dst,link_type}]} 또는 None.
+    확장 상한(DR-0014): aggregates는 신뢰도 내림차순 상위 _SG_ANOMALY_CAP건, cites는
+    kind(dst_type)별 상위 _SG_CITES_CAP_PER_KIND건, correlated_with는 이상징후당
+    _SG_CORRELATION_CAP건. 초과분은 각 그룹당 "more" 표시자 노드 1개로 대체한다.
+    focus 예외: 이 assessment가 entity_explain/why 의도로 특정 이상징후를 지정했다면
+    (attrs.slots.entity_id) 그 이상징후는 신뢰도 순위와 무관하게 항상 포함한다 — 사용자가
+    선택해서 조회한 대상이 "더보기" 뒤로 숨는 걸 방지.
+    반환 {center, nodes:[{id,type,label,lat,lon,...}], edges:[{src,dst,link_type}],
+    truncated: bool(어느 그룹이든 상한 발동 여부)} 또는 None.
     """
     a = store.get_assessment(assessment_id)
     if a is None:
@@ -1198,19 +1225,59 @@ def build_subgraph(store, assessment_id: str) -> Optional[dict]:
     }
     edges: list[dict] = []
     links = store.query_assessment_links(assessment_id)
-    # 1홉: Assessment → (aggregates/cites) → 근거 객체
-    for lk in links:
+    truncated = False
+
+    # 1홉 — aggregates(Anomaly): 신뢰도 내림차순 상위 N + focus 예외.
+    focus_entity_id = ((a.attrs or {}).get("slots") or {}).get("entity_id")
+    agg_links = [lk for lk in links if lk["link_type"] == "aggregates"]
+
+    def _anomaly_confidence(dst_id: str) -> float:
+        anom = store.get_anomaly(dst_id)
+        return anom.confidence if anom else 0.0
+
+    agg_links.sort(key=lambda lk: _anomaly_confidence(lk["dst_id"]), reverse=True)
+    if focus_entity_id:
+        # focus 대상을 맨 앞으로 고정(stable sort) — 상한 슬라이스에 항상 남는다.
+        agg_links.sort(key=lambda lk: lk["dst_id"] != focus_entity_id)
+    kept_agg = agg_links[:_SG_ANOMALY_CAP]
+    overflow_agg = len(agg_links) - len(kept_agg)
+    for lk in kept_agg:
         dst_id = lk["dst_id"]
         obj = _resolve_object(store, dst_id, ac_map, sat_map)
         if not obj:
             continue
         nodes.setdefault(dst_id, {"id": dst_id, **obj})
-        edges.append({"src": a.id, "dst": dst_id, "link_type": lk["link_type"]})
-    # 2홉: 각 Anomaly → evidenced_by Observation / involves Aircraft (provenance 깊이)
+        edges.append({"src": a.id, "dst": dst_id, "link_type": "aggregates"})
+    if overflow_agg > 0:
+        truncated = True
+        mid = f"more-aggregates-{a.id}"
+        nodes[mid] = _sg_more_node(mid, overflow_agg)
+        edges.append({"src": a.id, "dst": mid, "link_type": "aggregates"})
+
+    # 1홉 — cites(그 외 근거 객체): kind(dst_type)별 상한(위성통과 폭주 방지).
+    cites_by_kind: dict[str, list[dict]] = {}
     for lk in links:
-        if lk["dst_type"] != "Anomaly":
-            continue
-        aid = lk["dst_id"]
+        if lk["link_type"] == "cites":
+            cites_by_kind.setdefault(lk["dst_type"], []).append(lk)
+    for dst_type, group in cites_by_kind.items():
+        kept = group[:_SG_CITES_CAP_PER_KIND]
+        overflow = len(group) - len(kept)
+        for lk in kept:
+            dst_id = lk["dst_id"]
+            obj = _resolve_object(store, dst_id, ac_map, sat_map)
+            if not obj:
+                continue
+            nodes.setdefault(dst_id, {"id": dst_id, **obj})
+            edges.append({"src": a.id, "dst": dst_id, "link_type": "cites"})
+        if overflow > 0:
+            truncated = True
+            mid = f"more-cites-{dst_type}-{a.id}"
+            nodes[mid] = _sg_more_node(mid, overflow)
+            edges.append({"src": a.id, "dst": mid, "link_type": "cites"})
+
+    # 2홉: 각 이상징후(상한 통과분만) → evidenced_by Observation / involves Aircraft.
+    kept_anomaly_ids = [lk["dst_id"] for lk in kept_agg]
+    for aid in kept_anomaly_ids:
         for obs_id in store.query_evidence_ids(aid):
             obj = _resolve_object(store, obs_id, ac_map, sat_map)
             if obj:
@@ -1231,18 +1298,33 @@ def build_subgraph(store, assessment_id: str) -> Optional[dict]:
                 },
             )
             edges.append({"src": aid, "dst": nid, "link_type": "involves"})
-    # 3홉: 이상징후 ↔ (다른 이상징후 / OrbitPass / NewsEvent) correlated_with 링크.
+
+    # 3홉: 이상징후(상한 통과분만) ↔ (다른 이상징후 / OrbitPass / NewsEvent) correlated_with.
     # "은닉 정황" 내러티브 = dropout Anomaly ─correlated_with→ OrbitPass·NewsEvent 서브그래프.
-    anomaly_node_ids = [nid for nid, n in nodes.items() if n.get("type") == "Anomaly"]
-    for aid in anomaly_node_ids:
-        for c in store.query_correlations(aid):
+    # 이상징후당 상한(위성 통과 다건 상관이 주범).
+    for aid in kept_anomaly_ids:
+        corrs = store.query_correlations(aid)
+        kept_corr = corrs[:_SG_CORRELATION_CAP]
+        overflow_corr = len(corrs) - len(kept_corr)
+        for c in kept_corr:
             did = c["dst_id"]
             obj = _resolve_object(store, did, ac_map, sat_map)
             if not obj:
                 continue
             nodes.setdefault(did, {"id": did, **obj})
             edges.append({"src": aid, "dst": did, "link_type": "correlated_with"})
-    return {"center": a.id, "nodes": list(nodes.values()), "edges": edges}
+        if overflow_corr > 0:
+            truncated = True
+            mid = f"more-corr-{aid}"
+            nodes[mid] = _sg_more_node(mid, overflow_corr)
+            edges.append({"src": aid, "dst": mid, "link_type": "correlated_with"})
+
+    return {
+        "center": a.id,
+        "nodes": list(nodes.values()),
+        "edges": edges,
+        "truncated": truncated,
+    }
 
 
 def assessment_to_summary_dict(a: SituationAssessment) -> dict:

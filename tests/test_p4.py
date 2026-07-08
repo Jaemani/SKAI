@@ -298,6 +298,159 @@ def test_subgraph_multihop(tmp_path):
     # 다중홉: Anomaly —evidenced_by→ Observation 엣지가 존재(provenance 깊이)
     assert any(e["link_type"] == "evidenced_by" for e in sg["edges"])
     assert any(e["link_type"] == "aggregates" for e in sg["edges"])
+    assert sg["truncated"] is False  # 소규모 시드 — 상한 미발동
+
+
+# ──────────────────────────────────────────────
+# 4b. 서브그래프 확장 상한 (헤어볼 방지, DR-0014)
+# ──────────────────────────────────────────────
+def _make_anomaly(store, idx: int, confidence: float, now: int) -> str:
+    """평가용 최소 이상징후(근거 관측 1건 포함) 작성 — id 반환."""
+    aid = f"anomaly-cap_test-{idx}"
+    obs = Observation(
+        id=f"cap-{idx}-{now}",
+        aircraft_ref="synthx",
+        ts=now,
+        lat=36.5,
+        lon=127.0,
+        source="synthetic",
+        source_url="synthetic://x",
+    )
+    store.write_observation(obs)
+    store.write_anomaly(
+        Anomaly(
+            id=aid,
+            type="test_cap",
+            ts=now,
+            confidence=confidence,
+            status="candidate",
+            lat=36.5,
+            lon=127.0,
+            explanation="cap 테스트",
+            explainer_backend="template",
+            created_at=now,
+        ),
+        evidence=[obs.id],
+    )
+    return aid
+
+
+def _write_capped_assessment(
+    store, aid_list: list[str], now: int, slots: dict | None = None
+) -> str:
+    """모든 id를 인용하는 문장 1개짜리 Assessment를 저장하고 id를 반환."""
+    assess_id = "assess-cap-test"
+    store.write_assessment(
+        SituationAssessment(
+            id=assess_id,
+            region_ref="KADIZ",
+            window_start=now - 1800,
+            window_end=now,
+            query="cap test",
+            summary="cap test",
+            sentences=[
+                AssessmentSentence(
+                    text="cap test",
+                    cites=list(aid_list),
+                    confidence=0.9,
+                    kind="summary",
+                )
+            ],
+            confidence=0.9,
+            produced_by="template",
+            created_at=now,
+            attrs={"slots": slots} if slots else {},
+        )
+    )
+    return assess_id
+
+
+def test_subgraph_aggregates_cap_top8_by_confidence(tmp_path):
+    store = _store(tmp_path)
+    store.write_region(KADIZ_REGION)
+    store.write_aircraft(Aircraft(icao24="synthx", callsign="TEST77"))
+    now = 1783000000
+    # 신뢰도 0.50~0.95, 10건 — 상한(8) 초과.
+    aids = [_make_anomaly(store, i, 0.5 + i * 0.05, now) for i in range(10)]
+    assess_id = _write_capped_assessment(store, aids, now)
+    sg = build_subgraph(store, assess_id)
+    assert sg["truncated"] is True
+    anomaly_nodes = [n for n in sg["nodes"] if n["type"] == "Anomaly"]
+    more_nodes = [n for n in sg["nodes"] if n["type"] == "more"]
+    assert len(anomaly_nodes) == 8  # 상한 준수
+    assert len(more_nodes) == 1 and "+2건 더" in more_nodes[0]["label"]
+    # 상위 8건 = 신뢰도 내림차순 상위 8(마지막 2건 idx 0,1이 신뢰도 최저라 탈락)
+    kept_ids = {n["id"] for n in anomaly_nodes}
+    assert aids[0] not in kept_ids and aids[1] not in kept_ids
+    assert aids[9] in kept_ids  # 최고 신뢰도는 항상 포함
+
+
+def test_subgraph_aggregates_focus_bypasses_cap(tmp_path):
+    store = _store(tmp_path)
+    store.write_region(KADIZ_REGION)
+    store.write_aircraft(Aircraft(icao24="synthx", callsign="TEST77"))
+    now = 1783000000
+    aids = [_make_anomaly(store, i, 0.5 + i * 0.05, now) for i in range(10)]
+    # 가장 신뢰도 낮은(aids[0]) 이상징후를 focus로 지정 — entity_explain/why 조회 시뮬레이션.
+    assess_id = _write_capped_assessment(store, aids, now, slots={"entity_id": aids[0]})
+    sg = build_subgraph(store, assess_id)
+    anomaly_nodes = [n for n in sg["nodes"] if n["type"] == "Anomaly"]
+    assert len(anomaly_nodes) == 8  # 상한은 그대로 유지
+    kept_ids = {n["id"] for n in anomaly_nodes}
+    assert aids[0] in kept_ids  # focus는 신뢰도 최저인데도 항상 포함
+    assert sg["truncated"] is True
+
+
+def test_subgraph_cites_cap_per_kind(tmp_path):
+    store = _store(tmp_path)
+    store.write_region(KADIZ_REGION)
+    store.write_satellite(
+        Satellite(norad_id="39634", name="SENTINEL-1A", source_url="http://tle")
+    )
+    now = 1783000000
+    pass_ids = []
+    for i in range(9):  # 상한(6) 초과 — 위성통과 폭주 시나리오
+        pid = f"pass-39634-{now + i}"
+        store.write_orbitpass(
+            OrbitPass(
+                id=pid,
+                satellite_ref="39634",
+                region_ref="KADIZ",
+                start_ts=now + i,
+                end_ts=now + i + 60,
+                max_elevation=70.0,
+                ground_track=[[36.4, 126.9], [36.6, 127.1]],
+                source_url="http://tle",
+            )
+        )
+        pass_ids.append(pid)
+    assess_id = _write_capped_assessment(store, pass_ids, now)
+    sg = build_subgraph(store, assess_id)
+    pass_nodes = [n for n in sg["nodes"] if n["type"] == "OrbitPass"]
+    more_nodes = [n for n in sg["nodes"] if n["type"] == "more"]
+    assert len(pass_nodes) == 6
+    assert len(more_nodes) == 1 and "+3건 더" in more_nodes[0]["label"]
+    assert sg["truncated"] is True
+
+
+def test_subgraph_correlation_cap_per_anomaly(tmp_path):
+    store = _store(tmp_path)
+    store.write_region(KADIZ_REGION)
+    store.write_aircraft(Aircraft(icao24="synthx", callsign="TEST77"))
+    now = 1783000000
+    main_id = _make_anomaly(store, 0, 0.9, now)
+    partner_ids = [
+        _make_anomaly(store, i, 0.6, now) for i in range(1, 6)
+    ]  # 5건 — 상한(3) 초과
+    for pid in partner_ids:
+        store.link("Anomaly", main_id, "correlated_with", "Anomaly", pid)
+    assess_id = _write_capped_assessment(store, [main_id], now)
+    sg = build_subgraph(store, assess_id)
+    corr_edges = [e for e in sg["edges"] if e["link_type"] == "correlated_with"]
+    more_nodes = [n for n in sg["nodes"] if n["type"] == "more"]
+    assert len(corr_edges) == 4  # 실제 3건 + more 노드 엣지 1건
+    assert len(more_nodes) == 1 and "+2건 더" in more_nodes[0]["label"]
+    assert sg["truncated"] is True
 
 
 # ──────────────────────────────────────────────
